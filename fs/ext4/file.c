@@ -30,7 +30,30 @@
 #include "ext4_jbd2.h"
 #include "xattr.h"
 #include "acl.h"
+//#include "my.h"
 
+#include <linux/path.h>
+#include <linux/random.h>
+#include <linux/string.h>
+#include <linux/fcntl.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/syscalls.h>
+#include <linux/file.h>
+#include <linux/buffer_head.h>
+//#include <trace/events/ext4.h>
+#include <asm/unistd.h>
+
+//#include <asm/uaccess.h>
+
+// #define my_new_size 9984
+#define my_new_size 256
+long my_dax_no;
+int my_new_array[my_new_size];
+int my_start = 0;
+
+//int check_array[9] = {0,1,0,0,0,1,1,1,1};
 /*
  * Called when an inode is released. Note that this is different
  * from ext4_file_open: open gets called at every open, but release
@@ -297,10 +320,244 @@ static const struct vm_operations_struct ext4_file_vm_ops = {
 	.map_pages	= filemap_map_pages,
 	.page_mkwrite   = ext4_page_mkwrite,
 };
+static int my_ext4_fault(struct vm_area_struct *vma, struct vm_fault *vmf){
+	int result;
+	sector_t block;
+	int my_block, my_i;
+	handle_t *handle = NULL;
+	struct file *file = vma->vm_file;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = file_inode(vma->vm_file);
+	struct super_block *sb = inode->i_sb;
+	bool write = vmf->flags & FAULT_FLAG_WRITE;
+	printk(KERN_INFO "I'm at my_ext4_fault inode %lu\n",inode->i_ino);
+	
+
+	// added by sayan
+	// begin
+
+	printk(KERN_INFO "offset : %d\n",(sector_t)vmf->pgoff);
+	printk(KERN_INFO "%d\n",PAGE_SHIFT);
+	printk(KERN_INFO "%d\n",mapping->host->i_blkbits);
+	
+
+	//end
+
+
+
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
+	my_block = (int) block;
+	printk(KERN_INFO "my_block after seting : %d\n",my_block);
+	if (write) {
+		sb_start_pagefault(sb);
+		file_update_time(vma->vm_file);
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+		handle = ext4_journal_start_sb(sb, EXT4_HT_WRITE_PAGE,
+						EXT4_DATA_TRANS_BLOCKS(sb));
+	} else
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+
+	if (IS_ERR(handle))
+		result = VM_FAULT_SIGBUS;
+	else{
+	
+	        if(write){
+		        if(my_new_array[my_block]==1){
+		            result = __dax_fault(vma, vmf, ext4_dax_get_block);
+		            printk(KERN_INFO "result 1_dax_fault %d\n",result);
+		        }
+		        else{
+		            result = ext4_filemap_fault(vma,vmf);
+		            printk(KERN_INFO "result 1_filemap_fault %d\n",result);
+		        }
+		    }
+		    else{
+				printk(KERN_INFO "my_start line 375 is  %d\n",my_start);
+				//if (my_start == 1){
+				// my_start = 0;
+				printk(KERN_INFO "my_start line 378 is  %d\n",my_start);
+			
+				int my_cnt = 0;
+				int target_cnt = my_block + 1;
+
+				printk(KERN_INFO "my_cnt  is  %d\n",my_cnt);
+				printk(KERN_INFO "target_cnt is  %d\n",target_cnt);
+				int dax_block_to_read = 0;
+
+				for(my_i = 0; my_i<=my_new_size; my_i++){
+					if(my_new_array[my_i]==1){
+						my_cnt++;
+					}
+					if(my_cnt == target_cnt){
+						dax_block_to_read = my_i;
+						goto my_mod;
+						// break;
+					}
+				}
+				goto out;
+				// my_block = my_i;
+				// my_dax_no = my_i;
+
+				printk(KERN_INFO "my_block line 398 is  %d\n",my_block);
+				printk(KERN_INFO "my_dax_no line 399 is  %d\n",my_dax_no);
+				
+				//}
+				/*
+				if(my_block==0){
+                 my_dax_no = 0;
+                }
+				my_i =0;
+				*/
+			  //my_block = (int) block;
+			  
+			  /*
+                printk(KERN_INFO "my_block line 364 %d\n",my_block);
+                if(my_new_array[my_block]==1){
+                    if((int)my_dax_no> my_block){
+                    	printk(KERN_INFO "at line 367\n");
+                    	for(my_i = (int) my_dax_no; my_i<=my_new_size; my_i++){
+                        		if(my_new_array[my_i]==1){
+                        			printk(KERN_INFO "my_i 370 line %d",my_i);
+                        			my_dax_no = (unsigned long) my_i;
+                        			goto my_mod;
+                        		}
+                    	}
+                    	my_dax_no = (unsigned long) my_i;
+                    	printk(KERN_INFO "my_i 376 line %d",my_i);
+		            goto out;
+                
+                	}
+                	else
+                		goto my_mod;
+                }
+                if(my_new_array[my_block]==0){
+                	if((int)my_dax_no> my_block){
+                		for(my_i = (int) my_dax_no; my_i<=my_new_size; my_i++){
+                        		if(my_new_array[my_i]==1){
+                        			printk(KERN_INFO "my_i 388 line %d",my_i);
+                        			my_dax_no = (unsigned long) my_i;
+                        			goto my_mod;
+                        		}
+                    	}
+                    	my_dax_no = (unsigned long) my_i;
+                    	printk(KERN_INFO "my_i 394 line %d",my_i);
+		            goto out;
+                    	
+                	}
+                	else{
+                		for(my_i = (int) my_dax_no; my_i<=my_new_size; my_i++){
+                        		if(my_new_array[my_i]==1){
+                        			printk(KERN_INFO "my_i 402 line %d",my_i);
+                        			my_dax_no = (unsigned long) my_i;
+                        			goto my_mod;
+                        		}
+                        
+                    	}
+                    	my_dax_no = (unsigned long) my_i;
+                    	printk(KERN_INFO "my_i 409 line %d",my_i);
+		            goto out;    	
+                	}
+
+                }
+		        */     
+		    
+		    
+		    
+my_mod:
+		        // result = __my_dax_fault(vma, vmf, ext4_dax_get_block,my_dax_no);
+		        // my_dax_no = my_dax_no +1;
+				// dax_block_to_read
+		        result = __my_dax_fault(vma, vmf, ext4_dax_get_block,dax_block_to_read);
+				
+		        /*if(my_new_array[my_block]==1){
+		            result = __dax_fault(vma, vmf, ext4_dax_get_block);
+		            printk(KERN_INFO "result read 1_dax_fault %d\n",result);
+		        }
+		        else{
+		            result = 512;
+		            printk(KERN_INFO "result read 1_filemap_fault %d\n",result);
+		        }*/
+                
+		    }
+		    
+    }
+ out:   
+	if (write) {
+		if (!IS_ERR(handle))
+			ext4_journal_stop(handle);
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+		sb_end_pagefault(sb);
+	} else
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+
+	return result;
+}
+static int my_ext4_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf){
+	int result;
+	sector_t block;
+	int my_block;
+	handle_t *handle = NULL;
+	struct file *file = vma->vm_file;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = file_inode(vma->vm_file);
+	struct super_block *sb = inode->i_sb;
+	bool write = vmf->flags & FAULT_FLAG_WRITE;
+	printk(KERN_INFO "I'm at my_ext4_mkwrite inode %lu\n",inode->i_ino);
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
+	my_block = (int) block;
+	if (write) {
+		sb_start_pagefault(sb);
+		file_update_time(vma->vm_file);
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+		handle = ext4_journal_start_sb(sb, EXT4_HT_WRITE_PAGE,
+						EXT4_DATA_TRANS_BLOCKS(sb));
+	} else
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+
+	if (IS_ERR(handle))
+		result = VM_FAULT_SIGBUS;
+	else
+	  //  result = __dax_fault(vma, vmf, ext4_dax_get_block);
+		if(my_new_array[my_block]==1){
+		    result = __dax_fault(vma, vmf, ext4_dax_get_block);
+		    printk(KERN_INFO "result 2_dax_mkwrite %d\n",result);
+		}
+		else{
+		    filemap_map_pages(vma,vmf);
+		    result = ext4_page_mkwrite(vma,vmf);
+		    printk(KERN_INFO "result 2_filemap_write %d\n",result);
+	    }
+
+	if (write) {
+		if (!IS_ERR(handle))
+			ext4_journal_stop(handle);
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+		sb_end_pagefault(sb);
+	} else
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+
+	return result;
+
+
+}
+static const struct vm_operations_struct my_ext4_vm_ops = {
+	.fault = my_ext4_fault,
+	.page_mkwrite = my_ext4_mkwrite,
+
+};
 
 static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	// printk(KERN_INFO "I'm here in mmap\n");
+	
 	struct inode *inode = file->f_mapping->host;
+	// char *filename = "/home/madhumita/array.txt";
+	char *filename = "/home/sayan/array.txt";
+	// printk(KERN_INFO "filename loaded\n");
+	
+	int fd;
+	int my_i;
+	char buf[1];
 
 	if (ext4_encrypted_inode(inode)) {
 		int err = ext4_get_encryption_info(inode);
@@ -310,11 +567,77 @@ static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 			return -ENOKEY;
 	}
 	file_accessed(file);
+	if(inode->i_ino>11 && inode->i_ino<16){
+	    printk(KERN_INFO "I'm at ext4_file_mmap\n");
+	    mm_segment_t old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		fd = sys_open(filename, O_RDONLY, 0);
+  		if (fd >= 0){
+			my_i = 0;
+			while(sys_read(fd, buf, 1) == 1){
+				my_new_array[my_i] = buf[0] - '0';
+				my_i++;
+      			//printk("%c", buf[0]);
+			}
+   	//printk("\n");
+    			sys_close(fd);
+  		}
+ 		set_fs(old_fs);
+		/*mm_segment_t old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		fd = sys_open(filename, O_RDONLY, 0);
+  		if (fd >= 0){
+			my_i = 0;
+			while(sys_read(fd, buf, 1) == 1){
+				my_new_array[my_i] = buf[0] - '0';
+				my_i++;
+      			//printk("%c", buf[0]);
+			}
+   	//printk("\n");
+    			sys_close(fd);
+  		}
+ 		set_fs(old_fs);*/
+
+		/*for(my_i =0;my_i<my_new_size;my_i++){
+	
+			get_random_bytes(&my_rand, sizeof(int));
+			my_val = my_rand % 2;
+			my_new_array[my_i] = my_val;
+
+		}*/
+		//printk(KERN_INFO "my new array at file %d\n",my_path_ret);
+		/*for(my_i =0;my_i<my_new_size;my_i++){
+			printk(KERN_INFO " %d\t",my_new_array[my_i]);
+		}*/
+		//printk(KERN_INFO "my array\n");
+		//printk(KERN_INFO "my new array inode %lu\n",inode->i_ino);
+		/*for(my_i =0;my_i<my_new_size;my_i++){
+			printk(KERN_INFO " %d\t",my_new_array[my_i]);
+		}*/
+		vma->vm_ops = &my_ext4_vm_ops;
+		vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
+
+	
+
+		// added by sayan
+		//begin
+
+		// set my_start
+		// my_start = 1;
+		
+		//end
+	}
+	else{
 	if (IS_DAX(file_inode(file))) {
+	    printk(KERN_INFO "I'm at original ext4_dax_mmap\n");
+		
 		vma->vm_ops = &ext4_dax_vm_ops;
 		vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
 	} else {
+	    // printk(KERN_INFO "I'm at original ext4_file_mmap\n");
+		
 		vma->vm_ops = &ext4_file_vm_ops;
+	}
 	}
 	return 0;
 }

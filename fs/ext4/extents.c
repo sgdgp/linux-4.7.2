@@ -38,14 +38,26 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <asm/uaccess.h>
+#include <asm/segment.h>
 #include <linux/fiemap.h>
 #include <linux/backing-dev.h>
 #include "ext4_jbd2.h"
 #include "ext4_extents.h"
 #include "xattr.h"
-
+//#include "my.h"
+#include <linux/path.h>
+#include <linux/random.h>
+#include <linux/string.h>
+#include <linux/fcntl.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/syscalls.h>
+#include <linux/file.h>
+#include <linux/buffer_head.h>
 #include <trace/events/ext4.h>
-
+#include <asm/unistd.h>
+#include <linux/init.h>
 /*
  * used by extent splitting.
  */
@@ -56,7 +68,72 @@
 
 #define EXT4_EXT_DATA_VALID1	0x8  /* first half contains valid data */
 #define EXT4_EXT_DATA_VALID2	0x10 /* second half contains valid data */
+// #define my_size 9984
+#define my_size 256
+#define my_path "/new/data"
 
+ext4_fsblk_t my_first;  // hdd
+ext4_fsblk_t my_second; // pm
+int my_array[my_size];
+//int my_size;
+int my_flag;
+/*
+#define my_size 3840
+#define SIZE_NUM 3840
+
+//int my_array[2];
+
+struct DataItem* my_hashArray[SIZE_NUM]; 
+//struct DataItem* dummyItem;
+
+int my_hashCode(unsigned int key){
+   	return key % SIZE_NUM;
+}
+
+struct DataItem *my_search(unsigned int key){               
+   	//get the hash 
+  	int my_hashIndex = my_hashCode(key);  
+	
+   	//move in array until an empty 
+  	while(my_hashArray[my_hashIndex] != NULL){
+	
+      		if(my_hashArray[my_hashIndex]->key == key)
+         		return my_hashArray[my_hashIndex]; 
+			
+      		//go to next cell
+      		++my_hashIndex;
+		
+      		//wrap around the table
+      		my_hashIndex %= SIZE_NUM;
+   	}        
+   	return NULL;        
+}
+
+
+
+
+void my_insert(unsigned int key,int data){
+//get the hash 
+   	int my_hashIndex = my_hashCode(key);
+	struct DataItem *item = (struct DataItem*) kmalloc(sizeof(struct DataItem),GFP_ATOMIC);
+   	item->data = data;  
+   	item->key = key;     
+
+   	
+
+   	//move in array until an empty or deleted cell
+   	while(my_hashArray[my_hashIndex] != NULL && my_hashArray[my_hashIndex]->key != -1L){
+      		//go to next cell
+      		++my_hashIndex;
+		
+      		//wrap around the table
+      		my_hashIndex %= SIZE_NUM;
+   	}
+	
+   	my_hashArray[my_hashIndex] = item;        
+}
+
+*/
 static __le32 ext4_extent_block_csum(struct inode *inode,
 				     struct ext4_extent_header *eh)
 {
@@ -183,6 +260,8 @@ static ext4_fsblk_t ext4_ext_find_goal(struct inode *inode,
 			      struct ext4_ext_path *path,
 			      ext4_lblk_t block)
 {
+	
+	
 	if (path) {
 		int depth = path->p_depth;
 		struct ext4_extent *ex;
@@ -224,6 +303,50 @@ static ext4_fsblk_t ext4_ext_find_goal(struct inode *inode,
 	/* OK. use inode's group */
 	return ext4_inode_to_goal_block(inode);
 }
+
+
+
+/* For new allocation scheme */
+// static ext4_fsblk_t my_ext4_ext_find_goal(struct inode *inode,
+// 			      struct ext4_ext_path *path,
+// 			      ext4_lblk_t block)
+
+// static void my_ext4_ext_find_goal(struct inode *inode,
+// 			      struct ext4_ext_path *path,
+// 			      ext4_lblk_t block)
+// {
+	
+	
+// 	if (path) {
+// 		int depth = path->p_depth;
+// 		printk(KERN_INFO "depth --> %d \n",depth);
+
+// 		struct ext4_extent *ex;
+
+// 		ex = path[depth].p_ext;
+// 		if (ex) {
+// 			ext4_fsblk_t ext_pblk = ext4_ext_pblock(ex);
+// 			ext4_lblk_t ext_block = le32_to_cpu(ex->ee_block);
+
+// 			if (block > ext_block)
+// 				// return ext_pblk + (block - ext_block);
+// 				printk(KERN_INFO "block > ext_block : return value --> %llu \n",ext_pblk + (block - ext_block));
+// 			else
+// 				printk(KERN_INFO "block <= ext_block : return value --> %llu \n",ext_pblk - (ext_block - block));
+// 				// return ext_pblk - (ext_block - block);
+// 		}
+
+// 		if (path[depth].p_bh)
+// 			printk(KERN_INFO "ex = NULL, path[depth].p_bh, return value --> %llu \n",path[depth].p_bh->b_blocknr);
+// 			// return path[depth].p_bh->b_blocknr;
+// 	}
+
+// 	printk(KERN_INFO "no path, return value --> %llu \n",ext4_inode_to_goal_block(inode));
+// 	// return ext4_inode_to_goal_block(inode);
+// }
+
+
+
 
 /*
  * Allocation for a meta data block
@@ -4291,12 +4414,14 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 	struct ext4_extent newex, *ex, *ex2;
 	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
 	ext4_fsblk_t newblock = 0;
+	int my_i;
 	int free_on_err = 0, err = 0, depth, ret;
 	unsigned int allocated = 0, offset = 0;
 	unsigned int allocated_clusters = 0;
 	struct ext4_allocation_request ar;
-	ext4_lblk_t cluster_offset;
+	ext4_lblk_t cluster_offset,my_block;
 	bool map_from_cluster = false;
+	my_flag =0;
 
 	ext_debug("blocks %u/%u requested for inode %lu\n",
 		  map->m_lblk, map->m_len, inode->i_ino);
@@ -4459,8 +4584,91 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 
 	/* allocate new block */
 	ar.inode = inode;
-	ar.goal = ext4_ext_find_goal(inode, path, map->m_lblk);
+come_again:
+	if(inode->i_ino<=11 && inode->i_ino>15){
+		ar.goal = ext4_ext_find_goal(inode, path, map->m_lblk);
+	}
+	else if(inode->i_ino>11 && inode->i_ino<16){
+		printk(KERN_INFO "I'm here!!\n");
+		//my_i = (int)map->m_lblk;
+		// printk(KERN_INFO "Stats from ext4 goal finder\n");
+		// my_ext4_ext_find_goal(inode, path, map->m_lblk);
+		// printk(KERN_INFO "Proceeding\n");
+
+
+		if(my_array[map->m_lblk] == 0){//HDD
+			if(map->m_lblk==0){
+				printk(KERN_INFO "my block %u my_first %llu my_second %llu \n!",map->m_lblk,my_first,my_second);
+				//if(my_flag>0 && my_flag<5){
+					//ar.goal = my_first+100;			
+				//}
+				//else{
+					ar.goal =  32768;
+					my_first = 0;
+					// my_second = 2621440;
+					my_second = 1049600;  // sayan
+				//}		
+			}
+			else{
+				printk(KERN_INFO "my block %u my_first %llu my_second %llu \n!",map->m_lblk,my_first,my_second);
+				//if(my_flag>0 && my_flag<5){				
+					//ar.goal = my_first+100;
+					//my_flag++;			
+				//}
+				//else{
+					my_first = my_first+1;
+					ar.goal = my_first;	
+					ar.pleft = my_first-1;			
+				//}
+			}			
+
+		}
+		else{	//PM
+			if(map->m_lblk==0){
+				printk(KERN_INFO "my block %u my_first %llu my_second %llu \n!",map->m_lblk,my_first,my_second);
+				if(my_flag>0 && my_flag<5){
+					ar.goal = my_second+100;
+					my_first = 32768;
+				    my_second = 0;				
+				}
+				else{
+				// ar.goal =  2621440;
+				ar.goal =  1049600;  // sayan
+				my_first = 32768;
+				my_second = 0;
+				}
+			}
+			else{
+				printk(KERN_INFO "my block %u my_first %llu my_second %llu \n!",map->m_lblk,my_first,my_second);
+				
+				if(my_flag>0 && my_flag<5){
+					//if(my_second<1331200){
+					//	ar.goal = 1331200;
+
+					//}
+					//else
+						my_second = my_second+100;		
+						ar.goal = my_second;	
+						ar.pleft = my_second-1;	
+				}
+				else{	
+				    my_second = my_second+1;
+				    ar.goal = my_second;
+				    ar.pleft = my_second-1;
+				}
+				/*if(my_flag>0 && my_flag<5){
+					ar.goal = my_second+100;				
+				}		
+				my_second = my_second+1;
+				ar.goal = my_second;*/
+			
+			}
+
+		}
+	}
 	ar.logical = map->m_lblk;
+	
+	
 	/*
 	 * We calculate the offset from the beginning of the cluster
 	 * for the logical block number, since when we allocate a
@@ -4484,7 +4692,86 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 		ar.flags |= EXT4_MB_DELALLOC_RESERVED;
 	if (flags & EXT4_GET_BLOCKS_METADATA_NOFAIL)
 		ar.flags |= EXT4_MB_USE_RESERVED;
+	if(inode->i_ino>11 && inode->i_ino<16){
+		ar.flags |= EXT4_MB_HINT_NOPREALLOC;
+	}
 	newblock = ext4_mb_new_blocks(handle, &ar, &err);
+	if(inode->i_ino>11 && inode->i_ino<16){
+		printk(KERN_INFO "inode #%lu: block %u: len %u: allocate new block: goal %llu, flag %d found %llu/%u\n", inode->i_ino, map->m_lblk, map->m_len, ar.goal, my_flag, newblock, allocated);
+	}
+	if(inode->i_ino>11 && inode->i_ino<16){
+	/*if(my_array[map->m_lblk] == 0){
+		
+		if(newblock>3174400){
+			my_flag = my_flag+1;
+			if(my_flag<5){
+				my_first = ar.goal;				
+				goto come_again;
+			}	
+			else{
+				my_first = ar.goal+100;
+				my_block = map->m_lblk;
+				for(my_i=0;my_i<allocated;my_i++){
+					my_array[my_block] = 1;
+					my_block = my_block+1;
+				}
+				goto go_out;
+			}
+		}
+		my_first = newblock;
+	}
+	else{
+		my_second = newblock;
+	}*/
+	//my_i = (int)map->m_lblk;
+	if(my_array[map->m_lblk] == 0){
+		
+		// if(newblock>2620416){
+		if(newblock>1047552){ // sayan
+			///*my_flag = my_flag+1;
+			//if(my_flag<5){
+			//	my_first = ar.goal;				
+			//	goto come_again;
+			//}	
+			//else{
+			//	my_first = ar.goal+100;
+				  printk(KERN_INFO "<1>inside if of HDD \n");
+				my_block = map->m_lblk;
+				for(my_i=0;my_i<allocated;my_i++){
+					my_array[my_block] = 1;
+					my_block = my_block+1;
+				}
+				goto go_out;
+			//}
+		}
+		my_first = newblock+allocated;
+	}
+	else{
+		// if(newblock<2620416){
+		if(newblock<1047552){ // sayan
+			printk(KERN_INFO "<1>inside if of PM \n");
+			my_flag = my_flag+1;
+			if(my_flag<5){
+				my_second = ar.goal;
+				printk(KERN_INFO "<1>inside if of my flag \n");				
+				goto come_again;
+			}	
+			else{
+				//my_first = ar.goal+100;
+				printk(KERN_INFO "<1>inside else of my flag \n");
+				my_block = map->m_lblk;
+				for(my_i=0;my_i<allocated;my_i++){
+					my_array[my_block] = 0;
+					my_block = my_block+1;
+				}
+				goto go_out;
+			}
+		}
+		my_second = newblock+allocated;
+	}
+	}
+	
+go_out:
 	if (!newblock)
 		goto out2;
 	ext_debug("allocate new block: goal %llu, found %llu/%u\n",
@@ -4622,6 +4909,9 @@ out:
 	map->m_flags |= EXT4_MAP_MAPPED;
 	map->m_pblk = newblock;
 	map->m_len = allocated;
+	if(inode->i_ino>11 && inode->i_ino<16){
+		printk(KERN_INFO "came to out!\n");
+	}
 out2:
 	ext4_ext_drop_refs(path);
 	kfree(path);
@@ -4665,22 +4955,40 @@ retry:
 	ext4_std_error(inode->i_sb, err);
 }
 
+
 static int ext4_alloc_file_blocks(struct file *file, ext4_lblk_t offset,
 				  ext4_lblk_t len, loff_t new_size,
 				  int flags, int mode)
 {
 	struct inode *inode = file_inode(file);
 	handle_t *handle;
+	//int my_flag = 0;
+	int my_len = 0;
+	int my_i =0;
+	int my_val = 0;
 	int ret = 0;
 	int ret2 = 0;
 	int retries = 0;
 	int depth = 0;
+	//int my_r = 0;
 	struct ext4_map_blocks map;
 	unsigned int credits;
 	loff_t epos;
-
+    
 	map.m_lblk = offset;
 	map.m_len = len;
+	my_len = len;
+	/*	
+	for(i=0;i<=my_size;i=i+1){
+		//int r = rand() % 2;
+		if(i<1920)
+			my_r = 0; 
+		else
+			my_r = 1;
+		my_insert( i, my_r );
+	}
+	*/
+		
 	/*
 	 * Don't normalize the request if it can fit in one extent so
 	 * that it doesn't get unnecessarily split into multiple
@@ -4700,7 +5008,68 @@ static int ext4_alloc_file_blocks(struct file *file, ext4_lblk_t offset,
 		depth = ext_depth(inode);
 	else
 		depth = -1;
-
+	
+	if(inode->i_ino<=11 && inode->i_ino>15){
+		goto retry;
+	}
+	else{
+my_retry:
+		while(ret>=0 && my_len >= 0){
+			map.m_len = 1;
+			my_val = my_array[map.m_lblk];
+			for(my_i= map.m_lblk+1; my_i<my_size; my_i++){
+				if(my_array[my_i]!=my_val){
+					break;
+				}	
+				map.m_len = map.m_len+1;		
+			}
+			
+			if (depth >= 0 && depth != ext_depth(inode)) {
+				credits = ext4_chunk_trans_blocks(inode, len);
+				depth = ext_depth(inode);
+			}
+			handle = ext4_journal_start(inode, EXT4_HT_MAP_BLOCKS, credits);
+			ret = ext4_map_blocks(handle, inode, &map, flags);
+			if(inode->i_ino>11 && inode->i_ino<16){
+				printk(KERN_INFO "inode #%lu: block %u: len %u: ext4_ext_map_blocks printing in extents returned %d", inode->i_ino, map.m_lblk, map.m_len, ret);
+			}
+			if(ret<=0){
+			printk(KERN_INFO "ret <=0\n");
+			ext4_debug("inode #%lu: block %u: len %u: "
+				   "ext4_ext_map_blocks returned %d",
+				   inode->i_ino, map.m_lblk,
+				   map.m_len, ret);
+			ext4_mark_inode_dirty(handle, inode);
+			ret2 = ext4_journal_stop(handle);
+			break;
+			}
+			map.m_lblk = map.m_lblk+map.m_len;
+			my_len = my_len -map.m_len;
+			epos = (loff_t)map.m_lblk << inode->i_blkbits;
+			inode->i_ctime = ext4_current_time(inode);
+			if (new_size) {
+				if (epos > new_size)
+					epos = new_size;
+				if (ext4_update_inode_size(inode, epos) & 0x1)
+					inode->i_mtime = inode->i_ctime;
+			} else {
+				if (epos > inode->i_size)
+					ext4_set_inode_flag(inode,
+							    EXT4_INODE_EOFBLOCKS);
+			}
+			ext4_mark_inode_dirty(handle, inode);
+			ret2 = ext4_journal_stop(handle);
+			if (ret2)
+				break;
+			
+		}
+		if (ret == -ENOSPC &&
+			ext4_should_retry_alloc(inode->i_sb, &retries)) {
+			ret = 0;
+			goto my_retry;
+		}
+		goto my_final;
+	}
 retry:
 	while (ret >= 0 && len) {
 		/*
@@ -4718,6 +5087,7 @@ retry:
 			break;
 		}
 		ret = ext4_map_blocks(handle, inode, &map, flags);
+		
 		if (ret <= 0) {
 			ext4_debug("inode #%lu: block %u: len %u: "
 				   "ext4_ext_map_blocks returned %d",
@@ -4751,9 +5121,13 @@ retry:
 		ret = 0;
 		goto retry;
 	}
-
+my_final:
 	return ret > 0 ? ret2 : ret;
 }
+
+
+
+
 
 static long ext4_zero_range(struct file *file, loff_t offset,
 			    loff_t len, int mode)
@@ -4910,6 +5284,58 @@ out_mutex:
 	return ret;
 }
 
+int get_path(struct file *file){
+	char *tmp;
+	char *pathname;
+	int ret;
+	struct path *path;
+	path = &file->f_path;
+	path_get(path);
+	//char orig_path[15] = my_path;
+	tmp = (char *)__get_free_page(GFP_TEMPORARY);
+	if (!tmp) {
+    		path_put(path);
+    		return -ENOMEM;
+	}
+
+	pathname = d_path(path, tmp, PAGE_SIZE);
+	path_put(path);
+
+	if (IS_ERR(pathname)) {
+ 		free_page((unsigned long)tmp);
+  	  	return PTR_ERR(pathname);
+	}
+	ret = strcmp(pathname, my_path);
+    //	ret =0;
+	//printk(KERN_INFO "path %s\n",pathname);
+	free_page((unsigned long)tmp);
+	return ret;
+
+}
+
+void write_file(char *filename, char *data)
+{
+	struct file *file;
+	loff_t pos = 0;
+  	int fd;
+
+  	mm_segment_t old_fs = get_fs();
+  	set_fs(KERNEL_DS);
+
+  	fd = sys_open(filename, O_WRONLY|O_CREAT, 0644);
+  	if (fd >= 0) {
+    		sys_write(fd, data, strlen(data));
+    		file = fget(fd);
+    		if (file) {
+     			vfs_write(file, data, strlen(data), &pos);
+     		 	fput(file);
+    		}
+   		sys_close(fd);
+  	}
+  	set_fs(old_fs);
+}
+
+
 /*
  * preallocate space for a file. This implements ext4's fallocate file
  * operation, which gets called from sys_fallocate system call.
@@ -4920,13 +5346,87 @@ out_mutex:
 long ext4_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 {
 	struct inode *inode = file_inode(file);
+	//char *tmp;
+	//char *pathname;
 	loff_t new_size = 0;
+	int my_i = 0;
+	unsigned int my_rand,my_val;
 	unsigned int max_blocks;
 	int ret = 0;
+int fd;
+	int my_path_ret;
 	int flags;
 	ext4_lblk_t lblk;
+	char my_str[my_size+1];
+	//char *filename = "/home/madhumita/array.txt";
+	char *filename = "/home/sayan/array.txt";
 	unsigned int blkbits = inode->i_blkbits;
+	char buf[1];
+struct file* filp = NULL;
+struct inode *inodes;
 
+off_t fsize;
+	//struct path *path;
+	if(inode->i_ino>11 && inode->i_ino<16){
+		printk(KERN_INFO "Inode Number of this file is %lu \n",inode->i_ino);
+		/*ext4_debug("[Debug]Inode Number of this file is %lu \n",
+				   inode->i_ino);*/
+		/*path = &file->f_path;
+		path_get(path);
+		tmp = (char *)__get_free_page(GFP_TEMPORARY);
+		if (!tmp) {
+    			path_put(path);
+    			return -ENOMEM;
+		}
+
+		pathname = d_path(path, tmp, PAGE_SIZE);
+		path_put(&path);
+
+		if (IS_ERR(pathname)) {
+ 			free_page((unsigned long)tmp);
+  		  	return PTR_ERR(pathname);
+		}
+	
+		printk(KERN_INFO "path %s\n",pathname);
+		free_page((unsigned long)tmp);*/
+	
+	//	my_path_ret = get_path(file);
+	//	printk(KERN_INFO "path %d\n",my_path_ret);
+		/*for(my_i =0;my_i<my_size;my_i++){
+	
+			get_random_bytes(&my_rand, sizeof(int));
+			my_val = my_rand % 2;
+			my_array[my_i] = my_val;
+
+		}*/
+		mm_segment_t old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		fd = sys_open(filename, O_RDONLY, 0);
+		filp = filp_open(filename, O_RDONLY,0);
+		inodes=file_inode(filp);
+		if (fd >= 0){
+			int my_i = 0;
+			/*fsize=inodes->i_size;
+  printk(KERN_INFO "<1>file size:%i \n",(int)fsize);
+  my_array=(int *) kmalloc(fsize+1,GFP_ATOMIC);
+my_size = fsize;
+printk(KERN_INFO "<1>my_size:%i \n",(int)my_size);*/
+			while(sys_read(fd, buf, 1) == 1){
+				my_array[my_i] = buf[0] - '0';
+				my_i++;
+      			//printk(KERN_INFO "buf test %c", buf[0]);
+			}
+   	//printk("\n");
+    			sys_close(fd);
+			//filp_close(filp,NULL);
+  		}
+ 		set_fs(old_fs);
+		/*printk(KERN_INFO "my array fallocate\n");
+		for(my_i =0;my_i<my_size;my_i++){
+			printk(KERN_INFO " %d\n",my_array[my_i]);
+		}*/
+	}
+	
 	/*
 	 * Encrypted inodes can't handle collapse range or insert
 	 * range since we would need to re-encrypt blocks with a
@@ -5002,6 +5502,17 @@ long ext4_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	ret = ext4_alloc_file_blocks(file, lblk, max_blocks, new_size,
 				     flags, mode);
 	ext4_inode_resume_unlocked_dio(inode);
+	if(inode->i_ino>11 && inode->i_ino<16){
+		//printk(KERN_INFO "my new array fallocate\n");
+		for(my_i =0;my_i<my_size;my_i++){
+			//printk(KERN_INFO " %d\n",my_array[my_i]);
+			my_str[my_i] = (char) (my_array[my_i]+'0');
+			//my_new_array[my_i] = my_array[my_i];
+		}
+		my_str[my_size] = '\0';
+	write_file(filename, my_str);
+	}
+	
 	if (ret)
 		goto out;
 

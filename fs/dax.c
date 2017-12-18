@@ -32,6 +32,21 @@
 #include <linux/pfn_t.h>
 #include <linux/sizes.h>
 
+#include <linux/path.h>
+#include <linux/random.h>
+#include <linux/string.h>
+#include <linux/fcntl.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/syscalls.h>
+#include <linux/file.h>
+#include <linux/buffer_head.h>
+//#include <trace/events/ext4.h>
+#include <asm/unistd.h>
+#define my_dax_size 9984
+//unsigned long my_dax_no;
+
 /*
  * We use lowest available bit in exceptional entry for locking, other two
  * bits to determine entry type. In total 3 special bits.
@@ -49,6 +64,10 @@
 /* We choose 4096 entries - same as per-zone page wait tables */
 #define DAX_WAIT_TABLE_BITS 12
 #define DAX_WAIT_TABLE_ENTRIES (1 << DAX_WAIT_TABLE_BITS)
+int dax_flag;
+int check_array[my_dax_size];
+//int check_array[9] = {0,1,1,0,0,1,1,1,1};
+//int fill_array[my_dax_size];
 
 wait_queue_head_t wait_table[DAX_WAIT_TABLE_ENTRIES];
 
@@ -74,25 +93,33 @@ static long dax_map_atomic(struct block_device *bdev, struct blk_dax_ctl *dax)
 {
 	struct request_queue *q = bdev->bd_queue;
 	long rc = -EIO;
-
+	unsigned long my_rc;
 	dax->addr = (void __pmem *) ERR_PTR(-EIO);
-	if (blk_queue_enter(q, true) != 0)
+	printk(KERN_INFO "came to atomic!!\n");
+	if (blk_queue_enter(q, true) != 0){
+		printk(KERN_INFO "I'm at blk_queue_enter\n");
 		return rc;
+	}
 
 	rc = bdev_direct_access(bdev, dax);
 	if (rc < 0) {
+		printk(KERN_INFO "I'm at rc<0\n");
 		dax->addr = (void __pmem *) ERR_PTR(rc);
 		blk_queue_exit(q);
 		return rc;
 	}
+	my_rc = (unsigned long) dax->addr;
+	printk(KERN_INFO "going normally addr %lu rc %lu\n",my_rc,rc);
 	return rc;
 }
 
 static void dax_unmap_atomic(struct block_device *bdev,
 		const struct blk_dax_ctl *dax)
 {
-	if (IS_ERR(dax->addr))
+	if (IS_ERR(dax->addr)){
+	    printk(KERN_INFO "at error 120!!\n");
 		return;
+	}
 	blk_queue_exit(bdev->bd_queue);
 }
 
@@ -137,8 +164,11 @@ static bool buffer_size_valid(struct buffer_head *bh)
 static sector_t to_sector(const struct buffer_head *bh,
 		const struct inode *inode)
 {
-	sector_t sector = bh->b_blocknr << (inode->i_blkbits - 9);
-
+	sector_t sector = bh->b_blocknr << (inode->i_blkbits - 9);	
+	if(inode->i_ino>11 && inode->i_ino<15)
+	//printk(KERN_INFO "block number at buffer_head %lu\n",bh->b_blocknr);	
+	
+	
 	return sector;
 }
 
@@ -559,7 +589,6 @@ int dax_delete_mapping_entry(struct address_space *mapping, pgoff_t index)
  * workloads with sparse files.  We allocate a page cache page instead.
  * We'll kick it out of the page cache if it's ever written to,
  * otherwise it will simply fall out of the page cache under memory
- * pressure without ever having been dirtied.
  */
 static int dax_load_hole(struct address_space *mapping, void *entry,
 			 struct vm_fault *vmf)
@@ -613,13 +642,16 @@ static void *dax_insert_mapping_entry(struct address_space *mapping,
 	bool hole_fill = false;
 	void *new_entry;
 	pgoff_t index = vmf->pgoff;
-
-	if (vmf->flags & FAULT_FLAG_WRITE)
+    printk(KERN_INFO "I'm at insert_mapping entry 645\n");    
+	if (vmf->flags & FAULT_FLAG_WRITE){
+	    printk(KERN_INFO "I'm at error 647\n"); 
 		__mark_inode_dirty(mapping->host, I_DIRTY_PAGES);
+	}
 
 	/* Replacing hole page with block mapping? */
 	if (!radix_tree_exceptional_entry(entry)) {
 		hole_fill = true;
+		printk(KERN_INFO "I'm at hole_fill 654\n"); 
 		/*
 		 * Unmap the page now before we remove it from page cache below.
 		 * The page is locked so it cannot be faulted in again.
@@ -627,24 +659,32 @@ static void *dax_insert_mapping_entry(struct address_space *mapping,
 		unmap_mapping_range(mapping, vmf->pgoff << PAGE_SHIFT,
 				    PAGE_SIZE, 0);
 		error = radix_tree_preload(vmf->gfp_mask & ~__GFP_HIGHMEM);
-		if (error)
+		if (error){
+		    printk(KERN_INFO "I'm at error 663\n"); 
 			return ERR_PTR(error);
+		}
 	}
 
 	spin_lock_irq(&mapping->tree_lock);
 	new_entry = (void *)((unsigned long)RADIX_DAX_ENTRY(sector, false) |
 		       RADIX_DAX_ENTRY_LOCK);
 	if (hole_fill) {
+	    printk(KERN_INFO "I'm at hole_fill 672\n"); 
 		__delete_from_page_cache(entry, NULL);
+		printk(KERN_INFO "I'm at hole_fill 674\n"); 
 		/* Drop pagecache reference */
 		put_page(entry);
+		printk(KERN_INFO "I'm at hole_fill 677\n"); 
 		error = radix_tree_insert(page_tree, index, new_entry);
+		printk(KERN_INFO "I'm at hole_fill 679\n"); 
 		if (error) {
+		    printk(KERN_INFO "I'm at hole_fill 681\n"); 
 			new_entry = ERR_PTR(error);
 			goto unlock;
 		}
 		mapping->nrexceptional++;
 	} else {
+	    printk(KERN_INFO "I'm at else 687\n"); 
 		void **slot;
 		void *ret;
 
@@ -652,11 +692,14 @@ static void *dax_insert_mapping_entry(struct address_space *mapping,
 		WARN_ON_ONCE(ret != entry);
 		radix_tree_replace_slot(slot, new_entry);
 	}
-	if (vmf->flags & FAULT_FLAG_WRITE)
+	if (vmf->flags & FAULT_FLAG_WRITE){
+	    printk(KERN_INFO "I'm at if 696\n"); 
 		radix_tree_tag_set(page_tree, index, PAGECACHE_TAG_DIRTY);
+	}
  unlock:
 	spin_unlock_irq(&mapping->tree_lock);
 	if (hole_fill) {
+	    printk(KERN_INFO "I'm at 702\n"); 
 		radix_tree_preload_end();
 		/*
 		 * We don't need hole page anymore, it has been replaced with
@@ -666,6 +709,7 @@ static void *dax_insert_mapping_entry(struct address_space *mapping,
 			mapping->a_ops->freepage(entry);
 		unlock_page(entry);
 		put_page(entry);
+		printk(KERN_INFO "I'm at 712\n"); 
 	}
 	return new_entry;
 }
@@ -793,29 +837,112 @@ int dax_writeback_mapping_range(struct address_space *mapping,
 }
 EXPORT_SYMBOL_GPL(dax_writeback_mapping_range);
 
+static int my_dax_insert_mapping(struct address_space *mapping,
+			struct buffer_head *bh, void **entryp,
+			struct vm_area_struct *vma, struct vm_fault *vmf, sector_t blknum)
+{
+	unsigned long vaddr = (unsigned long)vmf->virtual_address;
+	struct inode *inode = mapping->host;
+	int my_i=0,my_j=0;
+	int retval=0;
+	struct block_device *bdev = bh->b_bdev;
+	bdev->bd_inode->i_ino=mapping->host->i_ino;
+	struct blk_dax_ctl dax = {
+		.sector = to_sector(bh, mapping->host),
+		.size = bh->b_size,
+	};	
+	int error;
+	sector_t block;
+	int my_block;
+	void *ret;
+	void *entry = *entryp;
+	unsigned long my_addr;
+	dax_flag =0;
+	printk(KERN_INFO "came to my_dax_insert_mapping!!\n");
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
+	//printk(KERN_INFO "dax_sector %lu \n",dax.sector);
+	if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	    dax.sector = blknum << (mapping->host->i_blkbits - 9);	
+	}
+	
+
+my_atomic:
+	//printk(KERN_INFO "insert_mapping sector %lu\n",dax.sector);
+	if (dax_map_atomic(bdev, &dax) < 0){
+		printk(KERN_INFO "error at map_atomic\n");
+		return PTR_ERR(dax.addr);
+	}
+	dax_unmap_atomic(bdev, &dax);
+	my_addr = (unsigned long) dax.addr;
+	ret = dax_insert_mapping_entry(mapping, vmf, entry, dax.sector);
+	if (IS_ERR(ret)){
+		printk(KERN_INFO "error at insert_mapping %lu\n",my_addr);
+		return PTR_ERR(ret);
+	}
+	*entryp = ret;
+	if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+		printk(KERN_INFO "inode #%lu: block %lu pgoff %lu sector %lu addr %lu pfn %llu size %ld dax_flag %d\n",mapping->host->i_ino,vmf->pgoff,block,dax.sector,my_addr,dax.pfn.val, dax.size,dax_flag);
+	
+		}
+
+my_return:
+	if(dax_flag==0)
+	return vm_insert_mixed(vma, vaddr, dax.pfn);
+	else
+	return retval;
+}
+
+
+
 static int dax_insert_mapping(struct address_space *mapping,
 			struct buffer_head *bh, void **entryp,
 			struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	unsigned long vaddr = (unsigned long)vmf->virtual_address;
+	struct inode *inode = mapping->host;
+	int my_i=0,my_j=0;
+	int retval=0;
 	struct block_device *bdev = bh->b_bdev;
+	bdev->bd_inode->i_ino=mapping->host->i_ino;
 	struct blk_dax_ctl dax = {
 		.sector = to_sector(bh, mapping->host),
 		.size = bh->b_size,
-	};
+	};	
+	int error;
+	sector_t block;
+	int my_block;
 	void *ret;
 	void *entry = *entryp;
-
-	if (dax_map_atomic(bdev, &dax) < 0)
+	unsigned long my_addr;
+	dax_flag =0;
+	printk(KERN_INFO "came to dax_insert_mapping!!\n");
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);	
+my_atomic:
+	printk(KERN_INFO "insert_mapping sector %lu\n",dax.sector);
+	if (dax_map_atomic(bdev, &dax) < 0){
+		printk(KERN_INFO "error at map_atomic\n");
 		return PTR_ERR(dax.addr);
+	}
+	printk(KERN_INFO "before unmap atomic\n");
 	dax_unmap_atomic(bdev, &dax);
-
+	printk(KERN_INFO "after unmap atomic\n");
+	my_addr = (unsigned long) dax.addr;
 	ret = dax_insert_mapping_entry(mapping, vmf, entry, dax.sector);
-	if (IS_ERR(ret))
+	if (IS_ERR(ret)){
+		printk(KERN_INFO "error at insert_mapping %lu\n",my_addr);
 		return PTR_ERR(ret);
+	}
 	*entryp = ret;
+	if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+		printk(KERN_INFO "inode #%lu: block %lu pgoff %lu sector %lu addr %lu pfn %llu size %ld dax_flag %d\n",mapping->host->i_ino,vmf->pgoff,block,dax.sector,my_addr,dax.pfn.val, dax.size,dax_flag);
+	
+		}
 
+my_return:
+	if(dax_flag==0)
 	return vm_insert_mixed(vma, vaddr, dax.pfn);
+	else
+	return retval;
 }
 
 /**
@@ -839,10 +966,18 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	unsigned long vaddr = (unsigned long)vmf->virtual_address;
 	unsigned blkbits = inode->i_blkbits;
 	sector_t block;
+	sector_t my_sector,my_new_block;
 	pgoff_t size;
 	int error;
+	int my_error;
+	dax_flag = 0;
 	int major = 0;
-
+	char *filename = "/home/madhumita/array.txt";
+	int fd;
+	int my_i,my_block,my_j=0;
+	char buf[1];
+    printk(KERN_INFO "I'm at dax_fault\n");
+	
 	/*
 	 * Check whether offset isn't beyond end of file now. Caller is supposed
 	 * to hold locks serializing us with truncate / punch hole so this is
@@ -860,23 +995,30 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	entry = grab_mapping_entry(mapping, vmf->pgoff);
 	if (IS_ERR(entry)) {
 		error = PTR_ERR(entry);
+		printk(KERN_INFO "at IS_ERR\n");
 		goto out;
 	}
 
 	error = get_block(inode, block, &bh, 0);
 	if (!error && (bh.b_size < PAGE_SIZE))
 		error = -EIO;		/* fs corruption? */
-	if (error)
+	if (error){
+		printk(KERN_INFO "at get_block\n");
 		goto unlock_entry;
+		}
 
 	if (vmf->cow_page) {
+		
 		struct page *new_page = vmf->cow_page;
+		printk(KERN_INFO "at cow page\n");
 		if (buffer_written(&bh))
 			error = copy_user_bh(new_page, inode, &bh, vaddr);
 		else
 			clear_user_highpage(new_page, vaddr);
-		if (error)
+		if (error){
+			printk(KERN_INFO "here at cow_error!!");
 			goto unlock_entry;
+		}
 		if (!radix_tree_exceptional_entry(entry)) {
 			vmf->page = entry;
 			return VM_FAULT_LOCKED;
@@ -886,7 +1028,9 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	}
 
 	if (!buffer_mapped(&bh)) {
+		printk(KERN_INFO "at buffer_mapped\n");
 		if (vmf->flags & FAULT_FLAG_WRITE) {
+			printk(KERN_INFO "here at buffer_write!!");
 			error = get_block(inode, block, &bh, 1);
 			count_vm_event(PGMAJFAULT);
 			mem_cgroup_count_vm_event(vma->vm_mm, PGMAJFAULT);
@@ -896,16 +1040,28 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 			if (error)
 				goto unlock_entry;
 		} else {
+			printk(KERN_INFO "here at LOAD_HOLE!!");
+			if(inode->i_ino>11 && inode->i_ino<15){
+			    goto my_dax;
+			}
+			else
 			return dax_load_hole(mapping, entry, vmf);
 		}
 	}
 
 	/* Filesystem should not return unwritten buffers to us! */
 	WARN_ON_ONCE(buffer_unwritten(&bh) || buffer_new(&bh));
+	printk(KERN_INFO "going to insert_mapping block %lu\n",block);
+my_dax:
+
+    my_new_block = bh.b_blocknr;
+	printk(KERN_INFO "my_block %lu\n",my_new_block);
 	error = dax_insert_mapping(mapping, &bh, &entry, vma, vmf);
  unlock_entry:
 	put_locked_mapping_entry(mapping, vmf->pgoff, entry);
  out:
+    if(dax_flag==1)
+        return 0;
 	if (error == -ENOMEM)
 		return VM_FAULT_OOM | major;
 	/* -EBUSY is fine, somebody else faulted on the same PTE */
@@ -914,6 +1070,140 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	return VM_FAULT_NOPAGE | major;
 }
 EXPORT_SYMBOL(__dax_fault);
+
+
+
+int __my_dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
+			get_block_t get_block,long skip_dax)
+{
+	struct file *file = vma->vm_file;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = mapping->host;
+	void *entry;
+	struct buffer_head bh;
+	unsigned long vaddr = (unsigned long)vmf->virtual_address;
+	unsigned blkbits = inode->i_blkbits;
+	sector_t block;
+	sector_t my_sector,my_new_block;
+	pgoff_t size;
+	int error;
+	int my_error;
+	dax_flag = 0;
+	int major = 0;
+	// char *filename = "/home/madhumita/array.txt";
+	char *filename = "/home/sayan/array.txt";
+	int fd;
+	int my_i,my_block,my_j=0;
+	char buf[1];
+    printk(KERN_INFO "I'm at dax_fault\n");
+	
+	/*
+	 * Check whether offset isn't beyond end of file now. Caller is supposed
+	 * to hold locks serializing us with truncate / punch hole so this is
+	 * a reliable test.
+	 */
+	size = (i_size_read(inode) + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	if (vmf->pgoff >= size)
+		return VM_FAULT_SIGBUS;
+
+	memset(&bh, 0, sizeof(bh));
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - blkbits);
+	bh.b_bdev = inode->i_sb->s_bdev;
+	bh.b_size = PAGE_SIZE;
+
+	entry = grab_mapping_entry(mapping, vmf->pgoff);
+	if (IS_ERR(entry)) {
+		error = PTR_ERR(entry);
+		printk(KERN_INFO "at IS_ERR\n");
+		goto out;
+	}
+
+	error = get_block(inode, block, &bh, 0);
+	if (!error && (bh.b_size < PAGE_SIZE))
+		error = -EIO;		/* fs corruption? */
+	if (error){
+		printk(KERN_INFO "at get_block\n");
+		goto unlock_entry;
+		}
+
+	if (vmf->cow_page) {
+		
+		struct page *new_page = vmf->cow_page;
+		printk(KERN_INFO "at cow page\n");
+		if (buffer_written(&bh))
+			error = copy_user_bh(new_page, inode, &bh, vaddr);
+		else
+			clear_user_highpage(new_page, vaddr);
+		if (error){
+			printk(KERN_INFO "here at cow_error!!");
+			goto unlock_entry;
+		}
+		if (!radix_tree_exceptional_entry(entry)) {
+			vmf->page = entry;
+			return VM_FAULT_LOCKED;
+		}
+		vmf->entry = entry;
+		return VM_FAULT_DAX_LOCKED;
+	}
+
+	if (!buffer_mapped(&bh)) {
+		printk(KERN_INFO "at buffer_mapped\n");
+		if (vmf->flags & FAULT_FLAG_WRITE) {
+			printk(KERN_INFO "here at buffer_write!!");
+			error = get_block(inode, block, &bh, 1);
+			count_vm_event(PGMAJFAULT);
+			mem_cgroup_count_vm_event(vma->vm_mm, PGMAJFAULT);
+			major = VM_FAULT_MAJOR;
+			if (!error && (bh.b_size < PAGE_SIZE))
+				error = -EIO;
+			if (error)
+				goto unlock_entry;
+		} else {
+			printk(KERN_INFO "here at LOAD_HOLE!!");
+			if(inode->i_ino>11 && inode->i_ino<15){
+			    goto my_dax;
+			}
+			else
+			return dax_load_hole(mapping, entry, vmf);
+		}
+	}
+
+	/* Filesystem should not return unwritten buffers to us! */
+	WARN_ON_ONCE(buffer_unwritten(&bh) || buffer_new(&bh));
+	printk(KERN_INFO "going to insert_mapping block %lu\n",block);
+my_dax:
+    if(inode->i_ino>11 && inode->i_ino<15){ 
+
+	    my_sector = skip_dax;
+	    // my_sector = (int) block;
+	    printk(KERN_INFO "my_block %lu\n",my_sector);
+	    my_error = get_block(inode, my_sector, &bh, 0);
+	    my_new_block = bh.b_blocknr;
+	    //my_dax_no = my_dax_no +1;
+	    printk(KERN_INFO "my_block %lu\n",my_new_block);
+		error = get_block(inode, block, &bh, 0);
+	    error = my_dax_insert_mapping(mapping, &bh, &entry, vma, vmf, my_new_block);
+
+    
+    }
+    else{
+	    my_new_block = bh.b_blocknr;
+		printk(KERN_INFO "my_block 1360 %lu\n",my_new_block);
+		error = dax_insert_mapping(mapping, &bh, &entry, vma, vmf);
+	}
+ unlock_entry:
+	put_locked_mapping_entry(mapping, vmf->pgoff, entry);
+ out:
+    if(dax_flag==1)
+        return 0;
+	if (error == -ENOMEM)
+		return VM_FAULT_OOM | major;
+	/* -EBUSY is fine, somebody else faulted on the same PTE */
+	if ((error < 0) && (error != -EBUSY))
+		return VM_FAULT_SIGBUS | major;
+	return VM_FAULT_NOPAGE | major;
+}
+EXPORT_SYMBOL(__my_dax_fault);
 
 /**
  * dax_fault - handle a page fault on a DAX file
