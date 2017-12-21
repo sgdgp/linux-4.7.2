@@ -44,7 +44,11 @@
 #include <linux/buffer_head.h>
 //#include <trace/events/ext4.h>
 #include <asm/unistd.h>
-#define my_dax_size 9984
+
+
+
+
+// #define my_dax_size 9984
 //unsigned long my_dax_no;
 
 /*
@@ -65,7 +69,7 @@
 #define DAX_WAIT_TABLE_BITS 12
 #define DAX_WAIT_TABLE_ENTRIES (1 << DAX_WAIT_TABLE_BITS)
 int dax_flag;
-int check_array[my_dax_size];
+// int check_array[my_dax_size];
 //int check_array[9] = {0,1,1,0,0,1,1,1,1};
 //int fill_array[my_dax_size];
 
@@ -165,7 +169,7 @@ static sector_t to_sector(const struct buffer_head *bh,
 		const struct inode *inode)
 {
 	sector_t sector = bh->b_blocknr << (inode->i_blkbits - 9);	
-	if(inode->i_ino>11 && inode->i_ino<15)
+	// if(inode->i_ino>11 && inode->i_ino<15)
 	//printk(KERN_INFO "block number at buffer_head %lu\n",bh->b_blocknr);	
 	
 	
@@ -861,7 +865,8 @@ static int my_dax_insert_mapping(struct address_space *mapping,
 	printk(KERN_INFO "came to my_dax_insert_mapping!!\n");
 	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
 	//printk(KERN_INFO "dax_sector %lu \n",dax.sector);
-	if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	// if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	if(is_file_graded(mapping->host)){
 	    dax.sector = blknum << (mapping->host->i_blkbits - 9);	
 	}
 	
@@ -880,7 +885,8 @@ my_atomic:
 		return PTR_ERR(ret);
 	}
 	*entryp = ret;
-	if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	// if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	if(is_file_graded(mapping->host)){
 		printk(KERN_INFO "inode #%lu: block %lu pgoff %lu sector %lu addr %lu pfn %llu size %ld dax_flag %d\n",mapping->host->i_ino,vmf->pgoff,block,dax.sector,my_addr,dax.pfn.val, dax.size,dax_flag);
 	
 		}
@@ -933,7 +939,8 @@ my_atomic:
 		return PTR_ERR(ret);
 	}
 	*entryp = ret;
-	if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	// if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	if(is_file_graded(mapping->host)){
 		printk(KERN_INFO "inode #%lu: block %lu pgoff %lu sector %lu addr %lu pfn %llu size %ld dax_flag %d\n",mapping->host->i_ino,vmf->pgoff,block,dax.sector,my_addr,dax.pfn.val, dax.size,dax_flag);
 	
 		}
@@ -972,8 +979,8 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	int my_error;
 	dax_flag = 0;
 	int major = 0;
-	char *filename = "/home/madhumita/array.txt";
-	int fd;
+	// char *filename = "/home/madhumita/array.txt";
+	// int fd;
 	int my_i,my_block,my_j=0;
 	char buf[1];
     printk(KERN_INFO "I'm at dax_fault\n");
@@ -1041,7 +1048,7 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 				goto unlock_entry;
 		} else {
 			printk(KERN_INFO "here at LOAD_HOLE!!");
-			if(inode->i_ino>11 && inode->i_ino<15){
+			if(is_file_graded(inode)){
 			    goto my_dax;
 			}
 			else
@@ -1053,7 +1060,6 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	WARN_ON_ONCE(buffer_unwritten(&bh) || buffer_new(&bh));
 	printk(KERN_INFO "going to insert_mapping block %lu\n",block);
 my_dax:
-
     my_new_block = bh.b_blocknr;
 	printk(KERN_INFO "my_block %lu\n",my_new_block);
 	error = dax_insert_mapping(mapping, &bh, &entry, vma, vmf);
@@ -1091,11 +1097,11 @@ int __my_dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	dax_flag = 0;
 	int major = 0;
 	// char *filename = "/home/madhumita/array.txt";
-	char *filename = "/home/sayan/array.txt";
+	// char *filename = "/home/sayan/array.txt";
 	int fd;
 	int my_i,my_block,my_j=0;
 	char buf[1];
-    printk(KERN_INFO "I'm at dax_fault\n");
+    printk(KERN_INFO "I'm at my dax_fault\n");
 	
 	/*
 	 * Check whether offset isn't beyond end of file now. Caller is supposed
@@ -1160,7 +1166,7 @@ int __my_dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 				goto unlock_entry;
 		} else {
 			printk(KERN_INFO "here at LOAD_HOLE!!");
-			if(inode->i_ino>11 && inode->i_ino<15){
+			if(is_file_graded(inode)){
 			    goto my_dax;
 			}
 			else
@@ -1172,7 +1178,7 @@ int __my_dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	WARN_ON_ONCE(buffer_unwritten(&bh) || buffer_new(&bh));
 	printk(KERN_INFO "going to insert_mapping block %lu\n",block);
 my_dax:
-    if(inode->i_ino>11 && inode->i_ino<15){ 
+    if(is_file_graded(inode)){ 
 
 	    my_sector = skip_dax;
 	    // my_sector = (int) block;

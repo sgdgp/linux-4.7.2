@@ -44,16 +44,165 @@
 #include <linux/buffer_head.h>
 //#include <trace/events/ext4.h>
 #include <asm/unistd.h>
+#include <linux/xattr.h>
 
 //#include <asm/uaccess.h>
 
 // #define my_new_size 9984
 #define my_new_size 256
-long my_dax_no;
-int my_new_array[my_new_size];
-int my_start = 0;
+// long my_dax_no;
+// int my_new_array[my_new_size];
+// int my_start = 0;
 
 //int check_array[9] = {0,1,0,0,0,1,1,1,1};
+
+
+
+// unsigned long long read_file_get_count(char *filename)
+// {
+// 	int fd;
+// 	char buf[1];
+// 	unsigned long long count = 0;
+// 	mm_segment_t old_fs = get_fs();
+// 	set_fs(KERNEL_DS);
+// 	fd = sys_open(filename, O_RDONLY, 0);
+// 	if (fd >= 0){
+// 		while(sys_read(fd, buf, 1) == 1){
+// 			if(buf[0]=='\n'){
+// 				count++;		
+// 			}
+// 		}
+// 		sys_close(fd);
+// 	}
+// 	set_fs(old_fs);
+
+// 	return (count + 1);
+// }
+
+
+// void read_file_get_array(char *filename, ext4_fsblk_t *grade_array,unsigned long long total)
+// {
+// 	printk(KERN_INFO "Filename : %s\n", filename);
+// 	printk(KERN_INFO "Total : %llu\n", total);
+
+// 	char num[24];
+// 	char buf[1];
+// 	int fd;
+// 	unsigned long long index = 0;
+// 	unsigned long long entry = 0;
+// 	int j;
+// 	mm_segment_t old_fs = get_fs();
+// 	set_fs(KERNEL_DS);
+// 	fd = sys_open(filename, O_RDONLY, 0);
+// 	printk(KERN_INFO "Opened file\n");
+	
+// 	if (fd >= 0){
+// 		while(index < total){
+// 			j = 0;
+// 			while(sys_read(fd, buf, 1) == 1){
+// 				if(buf[0]!='\n'){
+// 					num[j] = buf[0];
+// 					j++;		
+// 				}
+// 				else{
+// 					break;
+// 				}
+// 			}
+// 			num[j] = '\0';		
+
+// 			kstrtoull(num,10,&entry);
+// 			grade_array[index] = entry;
+// 			printk(KERN_INFO "Printing element of grade array : %llu\n",grade_array[index]);
+// 			index++;
+// 		}
+// 		sys_close(fd);
+		
+// 	}
+// 	set_fs(old_fs);
+// 	printk(KERN_INFO "Done reading grade array in function\n");
+
+// 	return;
+// }
+
+int is_file_graded(struct inode *inode) 
+{
+	// struct inode *inode = file_inode(file);
+	// const char *xattr_name = "user.is_graded";
+	// printk(KERN_INFO "Inside is_file_graded\n");
+	const char *xattr_name = "is_graded";
+	int is_graded = 0;
+	int xattr_size = sizeof(int);
+	// xattr_size = generic_getxattr(file->f_path.dentry, inode, xattr_name, (void *)&is_graded,xattr_size);
+	xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, (void *)&is_graded,xattr_size);
+	if (is_graded == 1){
+		printk(KERN_INFO "received a graded file\n");
+	}
+	// else{
+	// 	printk(KERN_INFO "received a non-graded file\n");
+	// }
+	// printk(KERN_INFO "is_graded = %d\n", is_graded);
+
+	return is_graded;
+}
+
+
+int read_high(struct inode *inode) 
+{
+	const char *xattr_name = "read_high";
+	int read_high = 0;
+	int xattr_size = sizeof(int);
+	xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, (void *)&read_high,xattr_size);
+	if (read_high == 1){
+		printk(KERN_INFO "to read only high\n");
+	}
+	
+	return read_high;
+}
+
+void print_grade_array(ext4_fsblk_t *grade_array, unsigned long long total)
+{
+	unsigned long long i;
+	for(i=0;i<total;i++)
+		printk(KERN_INFO "Element %llu : %llu\n",i,grade_array[i]);
+	return;
+}
+
+unsigned long long read_high_count_xattr(struct inode *inode)
+{
+	const char *xattr_name = "high_count";
+	unsigned long long high_count = 0;
+	int xattr_size = sizeof(unsigned long long);
+	xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, (void *)&high_count,xattr_size);
+	
+	return high_count;
+}
+
+void read_grade_xattr(struct inode *inode,ext4_fsblk_t *grade_array)
+{
+	const char *xattr_name = "grade_array";
+	// int read_high = 0;
+	int xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, NULL,0);
+	xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, (void *)grade_array,xattr_size);
+	
+
+	return;
+}
+
+
+int find_grade(ext4_fsblk_t grade_array[], unsigned long long total, ext4_fsblk_t val)
+{
+	unsigned long long i=0;
+	for(i=0;i<total;i++){
+		if (grade_array[i] == val)
+			return 1;
+	}
+	return 0;
+}
+
+
+
+
+
 /*
  * Called when an inode is released. Note that this is different
  * from ext4_file_open: open gets called at every open, but release
@@ -333,16 +482,27 @@ static int my_ext4_fault(struct vm_area_struct *vma, struct vm_fault *vmf){
 	printk(KERN_INFO "I'm at my_ext4_fault inode %lu\n",inode->i_ino);
 	
 
-	// added by sayan
-	// begin
+	
 
 	printk(KERN_INFO "offset : %d\n",(sector_t)vmf->pgoff);
 	printk(KERN_INFO "%d\n",PAGE_SHIFT);
 	printk(KERN_INFO "%d\n",mapping->host->i_blkbits);
 	
 
-	//end
+	ext4_fsblk_t *my_array = NULL;
+	unsigned long long total;	
+	if (is_file_graded(inode)){
+		printk(KERN_INFO "Trying to get grade array\n");
+		total = read_high_count_xattr(inode);
+		my_array = (ext4_fsblk_t *)kmalloc(total*sizeof(ext4_fsblk_t), GFP_USER);
+		printk(KERN_INFO "Malloced\n");
 
+		read_grade_xattr(inode,my_array);
+		printk(KERN_INFO "Read\n");
+		print_grade_array(my_array,total);
+		// printk(KERN_INFO "One element : %llu\n",my_array[0]);
+			
+	}
 
 
 	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
@@ -359,127 +519,69 @@ static int my_ext4_fault(struct vm_area_struct *vma, struct vm_fault *vmf){
 
 	if (IS_ERR(handle))
 		result = VM_FAULT_SIGBUS;
-	else{
+	else
+	{
 	
-	        if(write){
-		        if(my_new_array[my_block]==1){
+        if(write){
+	        // if(my_new_array[my_block]==1){
+	        if(find_grade(my_array,total,my_block) == 1){
+	            result = __dax_fault(vma, vmf, ext4_dax_get_block);
+	            printk(KERN_INFO "result 1_dax_fault %d\n",result);
+	        }
+	        else if(find_grade(my_array,total,my_block) == 0){
+	            result = ext4_filemap_fault(vma,vmf);
+	            printk(KERN_INFO "result 1_filemap_fault %d\n",result);
+	        }
+	    }
+	    else{
+
+	    	if(read_high(inode) == 1)
+	    	{	
+				// int my_cnt = 0;
+				// int target_cnt = my_block + 1;
+
+				// printk(KERN_INFO "my_cnt  is  %d\n",my_cnt);
+				// printk(KERN_INFO "target_cnt is  %d\n",target_cnt);
+				// int dax_block_to_read = 0;
+
+				// for(my_i = 0; my_i<=my_new_size; my_i++){
+				// 	if(find_grade(my_array,total,my_i) == 1){
+				// 		my_cnt++;
+				// 	}
+				// 	if(my_cnt == target_cnt){
+				// 		dax_block_to_read = my_i;
+				// 		goto my_mod;
+					
+				// 	}
+				// }
+	    		ext4_lblk_t target_block;
+	    		if(my_block >= total)
+	    		{
+					goto out;    			
+	    		}
+	    		else{
+	    			target_block = my_array[my_block];
+	    			goto my_mod;
+	    		}
+
+			my_mod:
+				printk(KERN_INFO "target block to read is  %d\n",target_block);
+		        result = __my_dax_fault(vma, vmf, ext4_dax_get_block,target_block);
+            }
+            if(read_high(inode) == 0)
+            {
+            	if(find_grade(my_array,total,my_block) == 1){
 		            result = __dax_fault(vma, vmf, ext4_dax_get_block);
 		            printk(KERN_INFO "result 1_dax_fault %d\n",result);
 		        }
-		        else{
+		        else if(find_grade(my_array,total,my_block) == 0){
 		            result = ext4_filemap_fault(vma,vmf);
 		            printk(KERN_INFO "result 1_filemap_fault %d\n",result);
 		        }
-		    }
-		    else{
-				printk(KERN_INFO "my_start line 375 is  %d\n",my_start);
-				//if (my_start == 1){
-				// my_start = 0;
-				printk(KERN_INFO "my_start line 378 is  %d\n",my_start);
-			
-				int my_cnt = 0;
-				int target_cnt = my_block + 1;
+            }
 
-				printk(KERN_INFO "my_cnt  is  %d\n",my_cnt);
-				printk(KERN_INFO "target_cnt is  %d\n",target_cnt);
-				int dax_block_to_read = 0;
-
-				for(my_i = 0; my_i<=my_new_size; my_i++){
-					if(my_new_array[my_i]==1){
-						my_cnt++;
-					}
-					if(my_cnt == target_cnt){
-						dax_block_to_read = my_i;
-						goto my_mod;
-						// break;
-					}
-				}
-				goto out;
-				// my_block = my_i;
-				// my_dax_no = my_i;
-
-				printk(KERN_INFO "my_block line 398 is  %d\n",my_block);
-				printk(KERN_INFO "my_dax_no line 399 is  %d\n",my_dax_no);
-				
-				//}
-				/*
-				if(my_block==0){
-                 my_dax_no = 0;
-                }
-				my_i =0;
-				*/
-			  //my_block = (int) block;
-			  
-			  /*
-                printk(KERN_INFO "my_block line 364 %d\n",my_block);
-                if(my_new_array[my_block]==1){
-                    if((int)my_dax_no> my_block){
-                    	printk(KERN_INFO "at line 367\n");
-                    	for(my_i = (int) my_dax_no; my_i<=my_new_size; my_i++){
-                        		if(my_new_array[my_i]==1){
-                        			printk(KERN_INFO "my_i 370 line %d",my_i);
-                        			my_dax_no = (unsigned long) my_i;
-                        			goto my_mod;
-                        		}
-                    	}
-                    	my_dax_no = (unsigned long) my_i;
-                    	printk(KERN_INFO "my_i 376 line %d",my_i);
-		            goto out;
-                
-                	}
-                	else
-                		goto my_mod;
-                }
-                if(my_new_array[my_block]==0){
-                	if((int)my_dax_no> my_block){
-                		for(my_i = (int) my_dax_no; my_i<=my_new_size; my_i++){
-                        		if(my_new_array[my_i]==1){
-                        			printk(KERN_INFO "my_i 388 line %d",my_i);
-                        			my_dax_no = (unsigned long) my_i;
-                        			goto my_mod;
-                        		}
-                    	}
-                    	my_dax_no = (unsigned long) my_i;
-                    	printk(KERN_INFO "my_i 394 line %d",my_i);
-		            goto out;
-                    	
-                	}
-                	else{
-                		for(my_i = (int) my_dax_no; my_i<=my_new_size; my_i++){
-                        		if(my_new_array[my_i]==1){
-                        			printk(KERN_INFO "my_i 402 line %d",my_i);
-                        			my_dax_no = (unsigned long) my_i;
-                        			goto my_mod;
-                        		}
-                        
-                    	}
-                    	my_dax_no = (unsigned long) my_i;
-                    	printk(KERN_INFO "my_i 409 line %d",my_i);
-		            goto out;    	
-                	}
-
-                }
-		        */     
-		    
-		    
-		    
-my_mod:
-		        // result = __my_dax_fault(vma, vmf, ext4_dax_get_block,my_dax_no);
-		        // my_dax_no = my_dax_no +1;
-				// dax_block_to_read
-		        result = __my_dax_fault(vma, vmf, ext4_dax_get_block,dax_block_to_read);
-				
-		        /*if(my_new_array[my_block]==1){
-		            result = __dax_fault(vma, vmf, ext4_dax_get_block);
-		            printk(KERN_INFO "result read 1_dax_fault %d\n",result);
-		        }
-		        else{
-		            result = 512;
-		            printk(KERN_INFO "result read 1_filemap_fault %d\n",result);
-		        }*/
-                
-		    }
-		    
+	    }
+	    
     }
  out:   
 	if (write) {
@@ -505,6 +607,22 @@ static int my_ext4_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf){
 	printk(KERN_INFO "I'm at my_ext4_mkwrite inode %lu\n",inode->i_ino);
 	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
 	my_block = (int) block;
+		
+	ext4_fsblk_t *my_array = NULL;
+	unsigned long long total;	
+	if (is_file_graded(inode)){
+		printk(KERN_INFO "Trying to get grade array\n");
+		total = read_high_count_xattr(inode);
+		my_array = (ext4_fsblk_t *)kmalloc(total*sizeof(ext4_fsblk_t), GFP_USER);
+		printk(KERN_INFO "Malloced\n");
+
+		read_grade_xattr(inode,my_array);
+		printk(KERN_INFO "Read\n");
+		print_grade_array(my_array,total);
+		// printk(KERN_INFO "One element : %llu\n",my_array[0]);
+			
+	}
+
 	if (write) {
 		sb_start_pagefault(sb);
 		file_update_time(vma->vm_file);
@@ -516,18 +634,18 @@ static int my_ext4_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf){
 
 	if (IS_ERR(handle))
 		result = VM_FAULT_SIGBUS;
-	else
-	  //  result = __dax_fault(vma, vmf, ext4_dax_get_block);
-		if(my_new_array[my_block]==1){
+	else{
+	  
+		if(find_grade(my_array,total,my_block)==1){
 		    result = __dax_fault(vma, vmf, ext4_dax_get_block);
 		    printk(KERN_INFO "result 2_dax_mkwrite %d\n",result);
 		}
-		else{
+		else if(find_grade(my_array,total,my_block)==0){
 		    filemap_map_pages(vma,vmf);
 		    result = ext4_page_mkwrite(vma,vmf);
 		    printk(KERN_INFO "result 2_filemap_write %d\n",result);
 	    }
-
+	}
 	if (write) {
 		if (!IS_ERR(handle))
 			ext4_journal_stop(handle);
@@ -548,12 +666,9 @@ static const struct vm_operations_struct my_ext4_vm_ops = {
 
 static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	// printk(KERN_INFO "I'm here in mmap\n");
+	// printk(KERN_INFO "I'm here in ext4 mmap\n");
 	
 	struct inode *inode = file->f_mapping->host;
-	// char *filename = "/home/madhumita/array.txt";
-	char *filename = "/home/sayan/array.txt";
-	// printk(KERN_INFO "filename loaded\n");
 	
 	int fd;
 	int my_i;
@@ -567,77 +682,27 @@ static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 			return -ENOKEY;
 	}
 	file_accessed(file);
-	if(inode->i_ino>11 && inode->i_ino<16){
-	    printk(KERN_INFO "I'm at ext4_file_mmap\n");
-	    mm_segment_t old_fs = get_fs();
-		set_fs(KERNEL_DS);
-		fd = sys_open(filename, O_RDONLY, 0);
-  		if (fd >= 0){
-			my_i = 0;
-			while(sys_read(fd, buf, 1) == 1){
-				my_new_array[my_i] = buf[0] - '0';
-				my_i++;
-      			//printk("%c", buf[0]);
-			}
-   	//printk("\n");
-    			sys_close(fd);
-  		}
- 		set_fs(old_fs);
-		/*mm_segment_t old_fs = get_fs();
-		set_fs(KERNEL_DS);
-		fd = sys_open(filename, O_RDONLY, 0);
-  		if (fd >= 0){
-			my_i = 0;
-			while(sys_read(fd, buf, 1) == 1){
-				my_new_array[my_i] = buf[0] - '0';
-				my_i++;
-      			//printk("%c", buf[0]);
-			}
-   	//printk("\n");
-    			sys_close(fd);
-  		}
- 		set_fs(old_fs);*/
-
-		/*for(my_i =0;my_i<my_new_size;my_i++){
 	
-			get_random_bytes(&my_rand, sizeof(int));
-			my_val = my_rand % 2;
-			my_new_array[my_i] = my_val;
 
-		}*/
-		//printk(KERN_INFO "my new array at file %d\n",my_path_ret);
-		/*for(my_i =0;my_i<my_new_size;my_i++){
-			printk(KERN_INFO " %d\t",my_new_array[my_i]);
-		}*/
-		//printk(KERN_INFO "my array\n");
-		//printk(KERN_INFO "my new array inode %lu\n",inode->i_ino);
-		/*for(my_i =0;my_i<my_new_size;my_i++){
-			printk(KERN_INFO " %d\t",my_new_array[my_i]);
-		}*/
+	
+
+	// printk(KERN_INFO "I'm here in ext4 mmap\n");
+	if(is_file_graded(file_inode(file))){
+	    printk(KERN_INFO "Graded file\n");
 		vma->vm_ops = &my_ext4_vm_ops;
 		vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
-
-	
-
-		// added by sayan
-		//begin
-
-		// set my_start
-		// my_start = 1;
-		
-		//end
 	}
 	else{
-	if (IS_DAX(file_inode(file))) {
-	    printk(KERN_INFO "I'm at original ext4_dax_mmap\n");
-		
-		vma->vm_ops = &ext4_dax_vm_ops;
-		vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
-	} else {
-	    // printk(KERN_INFO "I'm at original ext4_file_mmap\n");
-		
-		vma->vm_ops = &ext4_file_vm_ops;
-	}
+		if (IS_DAX(file_inode(file))) {
+		    // printk(KERN_INFO "I'm at original ext4_dax_mmap\n");
+			
+			vma->vm_ops = &ext4_dax_vm_ops;
+			vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
+		} else {
+		    // printk(KERN_INFO "I'm at original ext4_file_mmap\n");
+			
+			vma->vm_ops = &ext4_file_vm_ops;
+		}
 	}
 	return 0;
 }
