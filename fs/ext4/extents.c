@@ -57,6 +57,128 @@
 #define EXT4_EXT_DATA_VALID1	0x8  /* first half contains valid data */
 #define EXT4_EXT_DATA_VALID2	0x10 /* second half contains valid data */
 
+/*
+ * read_grade_xattr() is used to read the grade array from the extended attribute.
+*/
+void read_grade_xattr(struct inode *inode,struct grade_struct *grade_array)
+{
+	const char *xattr_name = "grade_array";
+	// int read_high = 0;
+	int xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, NULL,0);
+	xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, (void *)grade_array,xattr_size);
+	
+
+	return;
+}
+
+/*
+ * print_grade_struct() is used to print the grade array.
+ * Can be used for debugging purposes.
+ * The parameters are the grade array and the total number of 
+ * elements in the array.
+ */
+void print_grade_struct(struct grade_struct* grade_array, unsigned long long total)
+{
+	unsigned long long i;
+	for(i=0;i<total;i++){
+		printk(KERN_INFO "%llu %llu\n",grade_array[i].block_num,grade_array[i].len);
+	}
+}
+
+/*
+ * is_file_graded() returns whether the file has a grade information or not.
+ * It takes the inode number as a parameter.
+ */
+int is_file_graded(struct inode *inode) 
+{
+	const char *xattr_name = "is_graded";
+	int is_graded = 0;
+	int xattr_size = sizeof(int);
+	xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, (void *)&is_graded,xattr_size);
+	if (is_graded == 1){
+		printk(KERN_INFO "received a graded file\n");
+	}
+	
+	return is_graded;
+}
+
+/*
+ * find_grade() is to find the grade of a logical block.
+ * This also returns the length of graded or ungraded portion 
+ * starting from that logical block number (gets stored in the variable
+ * req_len). The return value is 1 for high grade and 0 otherwise.
+ */
+int find_grade(struct grade_struct* grade_array, unsigned long long total, ext4_fsblk_t val, unsigned long long *req_len)
+{
+	printk(KERN_INFO "Inside find_grade, val = %llu\n",val);
+	print_grade_struct(grade_array, total);
+
+	if (val >= (grade_array[total -1].block_num + grade_array[total -1].len) ){
+		printk(KERN_INFO "Here 1\n");
+		if (req_len != NULL)
+			(*req_len) = 0;
+		return 0;
+	}
+	
+	unsigned long long beg, end, mid;
+	beg = 0; 
+	end = total-1;
+	while (beg <= end){
+		mid = (beg + end)/2;
+		
+		printk(KERN_INFO "beg = %llu, mid = %llu, end = %llu\n",beg, mid, end);
+		printk(KERN_INFO "grade_array[mid].block_num = %llu\n",grade_array[mid].block_num);
+		
+		// if((val >= grade_array[mid].block_num) && (val <= (grade_array[mid].block_num + grade_array[mid].len)))
+		// 	break;
+		
+		if ((val >= grade_array[mid].block_num) && (val <= (grade_array[mid].block_num + grade_array[mid].len - 1)) ){
+			printk(KERN_INFO "Here 2\n");
+			if (req_len != NULL)
+				(*req_len) = grade_array[mid].len;
+			return 1;
+		}
+		if(beg == end)
+			break;
+		if (grade_array[mid].block_num > val){
+			printk(KERN_INFO "Greater\n");
+			end = (mid > 0) ? (mid - 1) : 0;
+		}
+		else{
+			printk(KERN_INFO "Not Greater\n");
+			beg = mid + 1;
+		}
+	}
+
+	
+
+	// if (val >= grade_array[mid].block_num && val <= (grade_array[mid].block_num + grade_array[mid].len) ){
+	// 	printk(KERN_INFO "Here 2\n");
+	// 	if (req_len != NULL)
+	// 		(*req_len) = grade_array[mid].len;
+	// 	return 1;
+	// }
+
+	printk(KERN_INFO "Here 3\n");
+	if (req_len != NULL)
+		(*req_len) = grade_array[mid].block_num - val;
+	return 0;
+}
+
+/*
+ * read_count_xattr() used to get the number of the elements in the grade array.
+*/
+unsigned long long read_count_xattr(struct inode *inode)
+{
+	const char *xattr_name = "grade_array";
+	unsigned long long xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, NULL,0);
+	unsigned long long total = xattr_size/sizeof(struct grade_struct);
+	printk(KERN_INFO "Size of grade_struct : %llu\n",sizeof(struct grade_struct));
+	printk(KERN_INFO "xattr size : %llu\n",xattr_size);
+	
+	return total;
+}
+
 static __le32 ext4_extent_block_csum(struct inode *inode,
 				     struct ext4_extent_header *eh)
 {
@@ -4291,12 +4413,31 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 	struct ext4_extent newex, *ex, *ex2;
 	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
 	ext4_fsblk_t newblock = 0;
+	int my_i;
 	int free_on_err = 0, err = 0, depth, ret;
 	unsigned int allocated = 0, offset = 0;
 	unsigned int allocated_clusters = 0;
 	struct ext4_allocation_request ar;
-	ext4_lblk_t cluster_offset;
+	ext4_lblk_t cluster_offset,my_block;
 	bool map_from_cluster = false;
+	my_flag =0;
+
+	struct grade_struct *my_array = NULL;
+	unsigned long long total;
+	if (is_file_graded(inode)){
+		printk(KERN_INFO "Trying to get grade array\n");
+		// total = read_file_get_count("/home/sayan/array.txt");
+		total = read_count_xattr(inode);
+		my_array = (struct grade_struct *)kmalloc(total*sizeof(struct grade_struct), GFP_USER);
+		printk(KERN_INFO "Malloced\n");
+
+		// read_file_get_array("/home/sayan/array.txt",my_array,total);
+		read_grade_xattr(inode,my_array);
+		printk(KERN_INFO "Read\n");
+		printk(KERN_INFO "One element : %llu\n",my_array[0]);
+			
+	}
+
 
 	ext_debug("blocks %u/%u requested for inode %lu\n",
 		  map->m_lblk, map->m_len, inode->i_ino);
@@ -4459,8 +4600,27 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 
 	/* allocate new block */
 	ar.inode = inode;
-	ar.goal = ext4_ext_find_goal(inode, path, map->m_lblk);
+come_again:
+	if(!is_file_graded(inode)){
+		ar.goal = ext4_ext_find_goal(inode, path, map->m_lblk);
+	}
+	else if(is_file_graded(inode)){
+		printk(KERN_INFO "I'm here!!\n");
+		unsigned long long temp;
+		// if(my_array[map->m_lblk] == 0){//HDD
+		if(find_grade(my_array,total,map->m_lblk,temp) == 0){//HDD
+			printk(KERN_INFO "HDD\n");
+			ar.goal =  32768;
+		}
+		// if(my_array[map->m_lblk] == 1){	//PM
+		if(find_grade(my_array,total,map->m_lblk,temp) == 1){	//PM
+			printk(KERN_INFO "PM\n");
+			ar.goal =  1049600;  // sayan
+		}
+	}
 	ar.logical = map->m_lblk;
+	
+	
 	/*
 	 * We calculate the offset from the beginning of the cluster
 	 * for the logical block number, since when we allocate a
@@ -4484,7 +4644,15 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 		ar.flags |= EXT4_MB_DELALLOC_RESERVED;
 	if (flags & EXT4_GET_BLOCKS_METADATA_NOFAIL)
 		ar.flags |= EXT4_MB_USE_RESERVED;
+	if(inode->i_ino>11 && inode->i_ino<16){
+		ar.flags |= EXT4_MB_HINT_NOPREALLOC;
+	}
 	newblock = ext4_mb_new_blocks(handle, &ar, &err);
+	if(is_file_graded(inode)){
+		printk(KERN_INFO "inode #%lu: block %u: len %u: allocate new block: goal %llu, flag %d found %llu/%u\n", inode->i_ino, map->m_lblk, map->m_len, ar.goal, my_flag, newblock, allocated);
+	}
+	
+go_out:
 	if (!newblock)
 		goto out2;
 	ext_debug("allocate new block: goal %llu, found %llu/%u\n",
@@ -4622,6 +4790,9 @@ out:
 	map->m_flags |= EXT4_MAP_MAPPED;
 	map->m_pblk = newblock;
 	map->m_len = allocated;
+	if(is_file_graded(inode)){
+		printk(KERN_INFO "came to out!\n");
+	}
 out2:
 	ext4_ext_drop_refs(path);
 	kfree(path);
@@ -4671,16 +4842,44 @@ static int ext4_alloc_file_blocks(struct file *file, ext4_lblk_t offset,
 {
 	struct inode *inode = file_inode(file);
 	handle_t *handle;
+	//int my_flag = 0;
+	int my_len = 0;
+	int my_i =0;
+	int my_val = 0;
 	int ret = 0;
 	int ret2 = 0;
 	int retries = 0;
 	int depth = 0;
+	//int my_r = 0;
 	struct ext4_map_blocks map;
 	unsigned int credits;
 	loff_t epos;
-
+    
 	map.m_lblk = offset;
 	map.m_len = len;
+	my_len = len;
+	
+	struct grade_struct *my_array = NULL;
+	unsigned long long total;	
+	if (is_file_graded(inode)){
+		printk(KERN_INFO "In ext4_alloc_file_blocks\n");
+		printk(KERN_INFO "Trying to get grade array\n");
+		// total = read_file_get_count("/home/sayan/array.txt");
+		total = read_count_xattr(inode);
+		printk(KERN_INFO "Total : %llu\n",total);
+
+		my_array = (struct grade_struct *)kmalloc(total*sizeof(struct grade_struct), GFP_USER);
+		printk(KERN_INFO "Malloced\n");
+
+		// read_file_get_array("/home/sayan/array.txt",my_array,total);
+		read_grade_xattr(inode,my_array);
+		printk(KERN_INFO "Read\n");
+		printk(KERN_INFO "Printing the array read\n");
+		print_grade_struct(my_array,total);
+			
+	}
+
+		
 	/*
 	 * Don't normalize the request if it can fit in one extent so
 	 * that it doesn't get unnecessarily split into multiple
@@ -4700,7 +4899,82 @@ static int ext4_alloc_file_blocks(struct file *file, ext4_lblk_t offset,
 		depth = ext_depth(inode);
 	else
 		depth = -1;
+	
+	if(!is_file_graded(inode)){
+		goto retry;
+	}
+	else{
+my_retry:
+		while(ret>=0 && my_len > 0){
+			map.m_len = 1;
+			// my_val = my_array[map.m_lblk];
+			unsigned long long req_len;
+			printk(KERN_INFO "Here in my_retry\n");
+			my_val = find_grade(my_array,total,map.m_lblk,&req_len);
+			printk(KERN_INFO "my_val = %llu, req_len=%llu, len=%llu \n",my_val,req_len, len);
 
+			// for(my_i= map.m_lblk+1; my_i<my_size; my_i++){
+			// 	// if(my_array[my_i]!=my_val){
+			// 	// 	break;
+			// 	// }	
+			// 	if(find_grade(my_array,total,my_i)!=my_val){
+			// 		break;
+			// 	}	
+				
+			// 	map.m_len = map.m_len+1;		
+			// }
+			if (req_len == 0)
+				map.m_len = len - map.m_lblk;
+			else
+				map.m_len = req_len;
+
+			if (depth >= 0 && depth != ext_depth(inode)) {
+				credits = ext4_chunk_trans_blocks(inode, len);
+				depth = ext_depth(inode);
+			}
+			handle = ext4_journal_start(inode, EXT4_HT_MAP_BLOCKS, credits);
+			ret = ext4_map_blocks(handle, inode, &map, flags);
+			if(is_file_graded(inode)){
+				printk(KERN_INFO "inode #%lu: block %u: len %u: ext4_ext_map_blocks printing in extents returned %d", inode->i_ino, map.m_lblk, map.m_len, ret);
+			}
+			if(ret<=0){
+				printk(KERN_INFO "ret <=0\n");
+				ext4_debug("inode #%lu: block %u: len %u: "
+					   "ext4_ext_map_blocks returned %d",
+					   inode->i_ino, map.m_lblk,
+					   map.m_len, ret);
+				ext4_mark_inode_dirty(handle, inode);
+				ret2 = ext4_journal_stop(handle);
+				break;
+			}
+			map.m_lblk = map.m_lblk+map.m_len;
+			my_len = my_len -map.m_len;
+			epos = (loff_t)map.m_lblk << inode->i_blkbits;
+			inode->i_ctime = ext4_current_time(inode);
+			if (new_size) {
+				if (epos > new_size)
+					epos = new_size;
+				if (ext4_update_inode_size(inode, epos) & 0x1)
+					inode->i_mtime = inode->i_ctime;
+			} else {
+				if (epos > inode->i_size)
+					ext4_set_inode_flag(inode,
+							    EXT4_INODE_EOFBLOCKS);
+			}
+			ext4_mark_inode_dirty(handle, inode);
+			ret2 = ext4_journal_stop(handle);
+			if (ret2)
+				break;
+			
+		}
+		if (ret == -ENOSPC &&
+			ext4_should_retry_alloc(inode->i_sb, &retries)) {
+			ret = 0;
+			printk(KERN_INFO "Doing my_retry\n");
+			goto my_retry;
+		}
+		goto my_final;
+	}
 retry:
 	while (ret >= 0 && len) {
 		/*
@@ -4718,6 +4992,7 @@ retry:
 			break;
 		}
 		ret = ext4_map_blocks(handle, inode, &map, flags);
+		
 		if (ret <= 0) {
 			ext4_debug("inode #%lu: block %u: len %u: "
 				   "ext4_ext_map_blocks returned %d",
@@ -4751,7 +5026,7 @@ retry:
 		ret = 0;
 		goto retry;
 	}
-
+my_final:
 	return ret > 0 ? ret2 : ret;
 }
 

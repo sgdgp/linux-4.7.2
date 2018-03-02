@@ -136,6 +136,11 @@ enum SHIFT_DIRECTION {
 /* Use blocks from reserved pool */
 #define EXT4_MB_USE_RESERVED		0x2000
 
+struct grade_struct {
+	ext4_lblk_t block_num;
+	unsigned long long len;
+};
+
 struct ext4_allocation_request {
 	/* target inode for block we're allocating */
 	struct inode *inode;
@@ -3186,6 +3191,11 @@ extern int ext4_check_blockref(const char *, unsigned int,
 /* extents.c */
 struct ext4_ext_path;
 struct ext4_extent;
+extern unsigned long long read_count_xattr(struct inode *inode);
+extern int find_grade(struct grade_struct* grade_array, unsigned long long total, ext4_fsblk_t val, unsigned long long *req_len);
+extern void print_grade_array(struct grade_struct *grade_array, unsigned long long total);
+extern void read_grade_xattr(struct inode *inode,struct grade_struct *grade_array);
+extern int is_file_graded(struct inode *inode) ;
 
 /*
  * Maximum number of logical blocks in a file; ext4_extent's ee_block is
