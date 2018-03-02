@@ -3055,6 +3055,7 @@ extern const struct file_operations ext4_dir_operations;
 extern const struct inode_operations ext4_file_inode_operations;
 extern const struct file_operations ext4_file_operations;
 extern loff_t ext4_llseek(struct file *file, loff_t offset, int origin);
+extern int read_high(struct inode *inode);
 
 /* inline.c */
 extern int ext4_get_max_inline_size(struct inode *inode);

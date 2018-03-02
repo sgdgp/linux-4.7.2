@@ -32,6 +32,24 @@
 #include "acl.h"
 
 /*
+ * read_high() returns 0 or 1 depending whether we want to read all the file
+ * blocks or only high graded, respectively.
+ * It gets this information from the extended attribute set by user beforehand.
+ */
+int read_high(struct inode *inode) 
+{
+	const char *xattr_name = "read_high";
+	int read_high = 0;
+	int xattr_size = sizeof(int);
+	xattr_size = ext4_xattr_get(inode, EXT4_XATTR_INDEX_USER,xattr_name, (void *)&read_high,xattr_size);
+	if (read_high == 1){
+		printk(KERN_INFO "to read only high\n");
+	}
+	
+	return read_high;
+}
+
+/*
  * Called when an inode is released. Note that this is different
  * from ext4_file_open: open gets called at every open, but release
  * gets called only when /all/ the files are closed.
@@ -298,9 +316,215 @@ static const struct vm_operations_struct ext4_file_vm_ops = {
 	.page_mkwrite   = ext4_page_mkwrite,
 };
 
+static int my_ext4_fault(struct vm_area_struct *vma, struct vm_fault *vmf){
+	int result;
+	sector_t block;
+	int my_block, my_i;
+	handle_t *handle = NULL;
+	struct file *file = vma->vm_file;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = file_inode(vma->vm_file);
+	struct super_block *sb = inode->i_sb;
+	bool write = vmf->flags & FAULT_FLAG_WRITE;
+	printk(KERN_INFO "I'm at my_ext4_fault inode %lu\n",inode->i_ino);
+	
+
+	
+
+	printk(KERN_INFO "offset : %d\n",(sector_t)vmf->pgoff);
+	printk(KERN_INFO "%d\n",PAGE_SHIFT);
+	printk(KERN_INFO "%d\n",mapping->host->i_blkbits);
+	
+
+	struct grade_struct *my_array = NULL;
+	unsigned long long total;	
+	if (is_file_graded(inode)){
+		printk(KERN_INFO "Trying to get grade array\n");
+		total = read_count_xattr(inode);
+		my_array = (struct grade_struct *)kmalloc(total*sizeof(struct grade_struct), GFP_USER);
+		printk(KERN_INFO "Malloced\n");
+
+		read_grade_xattr(inode,my_array);
+		printk(KERN_INFO "Read\n");
+		// print_grade_array(my_array,total);
+		// printk(KERN_INFO "One element : %llu\n",my_array[0]);
+			
+	}
+
+
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
+	my_block = (int) block;
+	printk(KERN_INFO "my_block after seting : %d\n",my_block);
+	if (write) {
+		sb_start_pagefault(sb);
+		file_update_time(vma->vm_file);
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+		handle = ext4_journal_start_sb(sb, EXT4_HT_WRITE_PAGE,
+						EXT4_DATA_TRANS_BLOCKS(sb));
+	} else
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+
+	if (IS_ERR(handle))
+		result = VM_FAULT_SIGBUS;
+	else
+	{
+	
+        if(write){
+	        // if(my_new_array[my_block]==1){
+        	unsigned long long temp;
+	        if(find_grade(my_array,total,my_block,&temp) == 1){
+	            result = __dax_fault(vma, vmf, ext4_dax_get_block);
+	            printk(KERN_INFO "result 1_dax_fault %d\n",result);
+	        }
+	        else if(find_grade(my_array,total,my_block,&temp) == 0){
+	            result = ext4_filemap_fault(vma,vmf);
+	            printk(KERN_INFO "result 1_filemap_fault %d\n",result);
+	        }
+	    }
+	    else{
+
+	    	if(read_high(inode) == 1)
+	    	{	
+				// int my_cnt = 0;
+				// int target_cnt = my_block + 1;
+
+				// printk(KERN_INFO "my_cnt  is  %d\n",my_cnt);
+				// printk(KERN_INFO "target_cnt is  %d\n",target_cnt);
+				// int dax_block_to_read = 0;
+
+				// for(my_i = 0; my_i<=my_new_size; my_i++){
+				// 	if(find_grade(my_array,total,my_i) == 1){
+				// 		my_cnt++;
+				// 	}
+				// 	if(my_cnt == target_cnt){
+				// 		dax_block_to_read = my_i;
+				// 		goto my_mod;
+					
+				// 	}
+				// }
+	    		ext4_lblk_t target_block;
+	    		if(my_block >= total)
+	    		{
+					goto out;    			
+	    		}
+	    		else{
+	    			// target_block = my_array[my_block];
+	    			target_block = my_block;
+
+	    			goto my_mod;
+	    		}
+
+			my_mod:
+				printk(KERN_INFO "target block to read is  %d\n",target_block);
+		        result = __my_dax_fault(vma, vmf, ext4_dax_get_block,target_block);
+            }
+            if(read_high(inode) == 0)
+            {
+            	unsigned long long temp;
+            	if(find_grade(my_array,total,my_block,&temp) == 1){
+		            result = __dax_fault(vma, vmf, ext4_dax_get_block);
+		            printk(KERN_INFO "result 1_dax_fault %d\n",result);
+		        }
+		        else if(find_grade(my_array,total,my_block,&temp) == 0){
+		            result = ext4_filemap_fault(vma,vmf);
+		            printk(KERN_INFO "result 1_filemap_fault %d\n",result);
+		        }
+            }
+
+	    }
+	    
+    }
+ out:   
+	if (write) {
+		if (!IS_ERR(handle))
+			ext4_journal_stop(handle);
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+		sb_end_pagefault(sb);
+	} else
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+
+	return result;
+}
+static int my_ext4_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf){
+	int result;
+	sector_t block;
+	int my_block;
+	handle_t *handle = NULL;
+	struct file *file = vma->vm_file;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = file_inode(vma->vm_file);
+	struct super_block *sb = inode->i_sb;
+	bool write = vmf->flags & FAULT_FLAG_WRITE;
+	printk(KERN_INFO "I'm at my_ext4_mkwrite inode %lu\n",inode->i_ino);
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
+	my_block = (int) block;
+		
+	struct grade_struct *my_array = NULL;
+	unsigned long long total;	
+	if (is_file_graded(inode)){
+		printk(KERN_INFO "Trying to get grade array\n");
+		total = read_count_xattr(inode);
+		my_array = (struct grade_struct *)kmalloc(total*sizeof(struct grade_struct), GFP_USER);
+		printk(KERN_INFO "Malloced\n");
+
+		read_grade_xattr(inode,my_array);
+		printk(KERN_INFO "Read\n");
+		// print_grade_array(my_array,total);
+		// printk(KERN_INFO "One element : %llu\n",my_array[0]);
+			
+	}
+
+	if (write) {
+		sb_start_pagefault(sb);
+		file_update_time(vma->vm_file);
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+		handle = ext4_journal_start_sb(sb, EXT4_HT_WRITE_PAGE,
+						EXT4_DATA_TRANS_BLOCKS(sb));
+	} else
+		down_read(&EXT4_I(inode)->i_mmap_sem);
+
+	if (IS_ERR(handle))
+		result = VM_FAULT_SIGBUS;
+	else{
+	  	
+	  	unsigned long long temp;
+		if(find_grade(my_array,total,my_block,&temp)==1){
+		    result = __dax_fault(vma, vmf, ext4_dax_get_block);
+		    printk(KERN_INFO "result 2_dax_mkwrite %d\n",result);
+		}
+		else if(find_grade(my_array,total,my_block,&temp)==0){
+		    filemap_map_pages(vma,vmf);
+		    result = ext4_page_mkwrite(vma,vmf);
+		    printk(KERN_INFO "result 2_filemap_write %d\n",result);
+	    }
+	}
+	if (write) {
+		if (!IS_ERR(handle))
+			ext4_journal_stop(handle);
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+		sb_end_pagefault(sb);
+	} else
+		up_read(&EXT4_I(inode)->i_mmap_sem);
+
+	return result;
+
+
+}
+static const struct vm_operations_struct my_ext4_vm_ops = {
+	.fault = my_ext4_fault,
+	.page_mkwrite = my_ext4_mkwrite,
+
+};
+
 static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	// printk(KERN_INFO "I'm here in ext4 mmap\n");
+	
 	struct inode *inode = file->f_mapping->host;
+	
+	int fd;
+	int my_i;
+	char buf[1];
 
 	if (ext4_encrypted_inode(inode)) {
 		int err = ext4_get_encryption_info(inode);
@@ -310,11 +534,27 @@ static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 			return -ENOKEY;
 	}
 	file_accessed(file);
-	if (IS_DAX(file_inode(file))) {
-		vma->vm_ops = &ext4_dax_vm_ops;
+	
+
+	
+
+	// printk(KERN_INFO "I'm here in ext4 mmap\n");
+	if(is_file_graded(file_inode(file))){
+	    printk(KERN_INFO "Graded file\n");
+		vma->vm_ops = &my_ext4_vm_ops;
 		vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
-	} else {
-		vma->vm_ops = &ext4_file_vm_ops;
+	}
+	else{
+		if (IS_DAX(file_inode(file))) {
+		    // printk(KERN_INFO "I'm at original ext4_dax_mmap\n");
+			
+			vma->vm_ops = &ext4_dax_vm_ops;
+			vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
+		} else {
+		    // printk(KERN_INFO "I'm at original ext4_file_mmap\n");
+			
+			vma->vm_ops = &ext4_file_vm_ops;
+		}
 	}
 	return 0;
 }

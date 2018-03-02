@@ -793,6 +793,63 @@ int dax_writeback_mapping_range(struct address_space *mapping,
 }
 EXPORT_SYMBOL_GPL(dax_writeback_mapping_range);
 
+static int my_dax_insert_mapping(struct address_space *mapping,
+			struct buffer_head *bh, void **entryp,
+			struct vm_area_struct *vma, struct vm_fault *vmf, sector_t blknum)
+{
+	unsigned long vaddr = (unsigned long)vmf->virtual_address;
+	struct inode *inode = mapping->host;
+	int my_i=0,my_j=0;
+	int retval=0;
+	struct block_device *bdev = bh->b_bdev;
+	bdev->bd_inode->i_ino=mapping->host->i_ino;
+	struct blk_dax_ctl dax = {
+		.sector = to_sector(bh, mapping->host),
+		.size = bh->b_size,
+	};	
+	int error;
+	sector_t block;
+	int my_block;
+	void *ret;
+	void *entry = *entryp;
+	unsigned long my_addr;
+	dax_flag =0;
+	printk(KERN_INFO "came to my_dax_insert_mapping!!\n");
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - mapping->host->i_blkbits);
+	//printk(KERN_INFO "dax_sector %lu \n",dax.sector);
+	// if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	if(is_file_graded(mapping->host)){
+	    dax.sector = blknum << (mapping->host->i_blkbits - 9);	
+	}
+	
+
+my_atomic:
+	//printk(KERN_INFO "insert_mapping sector %lu\n",dax.sector);
+	if (dax_map_atomic(bdev, &dax) < 0){
+		printk(KERN_INFO "error at map_atomic\n");
+		return PTR_ERR(dax.addr);
+	}
+	dax_unmap_atomic(bdev, &dax);
+	my_addr = (unsigned long) dax.addr;
+	ret = dax_insert_mapping_entry(mapping, vmf, entry, dax.sector);
+	if (IS_ERR(ret)){
+		printk(KERN_INFO "error at insert_mapping %lu\n",my_addr);
+		return PTR_ERR(ret);
+	}
+	*entryp = ret;
+	// if(mapping->host->i_ino>11 && mapping->host->i_ino<=15){
+	if(is_file_graded(mapping->host)){
+		printk(KERN_INFO "inode #%lu: block %lu pgoff %lu sector %lu addr %lu pfn %llu size %ld dax_flag %d\n",mapping->host->i_ino,vmf->pgoff,block,dax.sector,my_addr,dax.pfn.val, dax.size,dax_flag);
+	
+		}
+
+my_return:
+	if(dax_flag==0)
+	return vm_insert_mixed(vma, vaddr, dax.pfn);
+	else
+	return retval;
+}
+
 static int dax_insert_mapping(struct address_space *mapping,
 			struct buffer_head *bh, void **entryp,
 			struct vm_area_struct *vma, struct vm_fault *vmf)
@@ -914,6 +971,138 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
 	return VM_FAULT_NOPAGE | major;
 }
 EXPORT_SYMBOL(__dax_fault);
+
+int __my_dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
+			get_block_t get_block,long skip_dax)
+{
+	struct file *file = vma->vm_file;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = mapping->host;
+	void *entry;
+	struct buffer_head bh;
+	unsigned long vaddr = (unsigned long)vmf->virtual_address;
+	unsigned blkbits = inode->i_blkbits;
+	sector_t block;
+	sector_t my_sector,my_new_block;
+	pgoff_t size;
+	int error;
+	int my_error;
+	dax_flag = 0;
+	int major = 0;
+	// char *filename = "/home/madhumita/array.txt";
+	// char *filename = "/home/sayan/array.txt";
+	int fd;
+	int my_i,my_block,my_j=0;
+	char buf[1];
+    printk(KERN_INFO "I'm at my dax_fault\n");
+	
+	/*
+	 * Check whether offset isn't beyond end of file now. Caller is supposed
+	 * to hold locks serializing us with truncate / punch hole so this is
+	 * a reliable test.
+	 */
+	size = (i_size_read(inode) + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	if (vmf->pgoff >= size)
+		return VM_FAULT_SIGBUS;
+
+	memset(&bh, 0, sizeof(bh));
+	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - blkbits);
+	bh.b_bdev = inode->i_sb->s_bdev;
+	bh.b_size = PAGE_SIZE;
+
+	entry = grab_mapping_entry(mapping, vmf->pgoff);
+	if (IS_ERR(entry)) {
+		error = PTR_ERR(entry);
+		printk(KERN_INFO "at IS_ERR\n");
+		goto out;
+	}
+
+	error = get_block(inode, block, &bh, 0);
+	if (!error && (bh.b_size < PAGE_SIZE))
+		error = -EIO;		/* fs corruption? */
+	if (error){
+		printk(KERN_INFO "at get_block\n");
+		goto unlock_entry;
+		}
+
+	if (vmf->cow_page) {
+		
+		struct page *new_page = vmf->cow_page;
+		printk(KERN_INFO "at cow page\n");
+		if (buffer_written(&bh))
+			error = copy_user_bh(new_page, inode, &bh, vaddr);
+		else
+			clear_user_highpage(new_page, vaddr);
+		if (error){
+			printk(KERN_INFO "here at cow_error!!");
+			goto unlock_entry;
+		}
+		if (!radix_tree_exceptional_entry(entry)) {
+			vmf->page = entry;
+			return VM_FAULT_LOCKED;
+		}
+		vmf->entry = entry;
+		return VM_FAULT_DAX_LOCKED;
+	}
+
+	if (!buffer_mapped(&bh)) {
+		printk(KERN_INFO "at buffer_mapped\n");
+		if (vmf->flags & FAULT_FLAG_WRITE) {
+			printk(KERN_INFO "here at buffer_write!!");
+			error = get_block(inode, block, &bh, 1);
+			count_vm_event(PGMAJFAULT);
+			mem_cgroup_count_vm_event(vma->vm_mm, PGMAJFAULT);
+			major = VM_FAULT_MAJOR;
+			if (!error && (bh.b_size < PAGE_SIZE))
+				error = -EIO;
+			if (error)
+				goto unlock_entry;
+		} else {
+			printk(KERN_INFO "here at LOAD_HOLE!!");
+			if(is_file_graded(inode)){
+			    goto my_dax;
+			}
+			else
+			return dax_load_hole(mapping, entry, vmf);
+		}
+	}
+
+	/* Filesystem should not return unwritten buffers to us! */
+	WARN_ON_ONCE(buffer_unwritten(&bh) || buffer_new(&bh));
+	printk(KERN_INFO "going to insert_mapping block %lu\n",block);
+my_dax:
+    if(is_file_graded(inode)){ 
+
+	    my_sector = skip_dax;
+	    // my_sector = (int) block;
+	    printk(KERN_INFO "my_block %lu\n",my_sector);
+	    my_error = get_block(inode, my_sector, &bh, 0);
+	    my_new_block = bh.b_blocknr;
+	    //my_dax_no = my_dax_no +1;
+	    printk(KERN_INFO "my_block %lu\n",my_new_block);
+		error = get_block(inode, block, &bh, 0);
+	    error = my_dax_insert_mapping(mapping, &bh, &entry, vma, vmf, my_new_block);
+
+    
+    }
+    else{
+	    my_new_block = bh.b_blocknr;
+		printk(KERN_INFO "my_block 1360 %lu\n",my_new_block);
+		error = dax_insert_mapping(mapping, &bh, &entry, vma, vmf);
+	}
+ unlock_entry:
+	put_locked_mapping_entry(mapping, vmf->pgoff, entry);
+ out:
+    if(dax_flag==1)
+        return 0;
+	if (error == -ENOMEM)
+		return VM_FAULT_OOM | major;
+	/* -EBUSY is fine, somebody else faulted on the same PTE */
+	if ((error < 0) && (error != -EBUSY))
+		return VM_FAULT_SIGBUS | major;
+	return VM_FAULT_NOPAGE | major;
+}
+EXPORT_SYMBOL(__my_dax_fault);
 
 /**
  * dax_fault - handle a page fault on a DAX file
